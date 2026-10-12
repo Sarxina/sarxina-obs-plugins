@@ -1,0 +1,13 @@
+# Downloaded build dependencies (OBS sources, obs-deps, Qt 6)
+/.deps/
+
+# Build folders
+/build*/
+
+# Release archives, attached to a GitHub release instead of being committed
+/dist/
+
+# Editor folders
+/.vs/
+/.vscode/
+/CMakeUserPresets.json
