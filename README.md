@@ -2,7 +2,7 @@
 
 ## SlingLive
 
-The only OBS plugin that makes you hit the right button with a slingshot to Record or Go Live.
+The only OBS plugin that makes you hit the right button with a slingshot to Record or Go Live. Plinko is in the gear menu.
 
 ![SlingLive in OBS](docs/slinglive-demo.gif)
 
@@ -14,9 +14,3 @@ Needs OBS Studio 32.2 or newer on Windows.
 2. Download the zip from [Releases](../../releases/latest).
 3. Extract it into your OBS Studio folder, usually `C:\Program Files\obs-studio`.
 4. Open OBS and tick **Docks > SlingLive**.
-
-### Use
-
-Pull the head back with the mouse and let go. Whatever it hits gets pressed.
-
-For Plinko, pick it in the gear menu or press 3. Click to drop the head, and the button it lands on gets pressed.
