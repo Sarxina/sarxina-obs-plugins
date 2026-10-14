@@ -2,11 +2,13 @@
 // into frontend API calls. Used only in real mode.
 #pragma once
 
-#include "sling-game.hpp"
+#include "controls.hpp"
 
 #include <obs-frontend-api.h>
 
-class ObsBridge : public sling::Host {
+namespace sarxina {
+
+class ObsBridge : public Host {
 public:
 	// Frontend events arrive here; `now` is the dock's clock in milliseconds.
 	void handleEvent(enum obs_frontend_event event, double now);
@@ -15,15 +17,11 @@ public:
 	// Called every frame while the dock is on screen: keeps the clock, and does a refresh once a second.
 	void follow(double now);
 	// Fills in what the panel should show.
-	void apply(sling::Panel &panel) const;
+	void apply(PanelState &state) const;
 	// Stops making calls into OBS (it is shutting down).
 	void shutDown() { closed_ = true; }
 
-	void setStreaming(bool on) override;
-	void setRecording(bool on) override;
-	void setVirtualCam(bool on) override;
-	void setStudioMode(bool on) override;
-	void openSettings() override;
+	void press(Control control, bool on) override;
 
 private:
 	enum class Stream {
@@ -32,6 +30,9 @@ private:
 		Starting,  // OBS is connecting
 		Live,
 	};
+
+	void setStreaming(bool on);
+	void openSettings();
 
 	Stream stream_ = Stream::Offline;
 	double streamSince_ = 0;    // when the current stream state began
@@ -44,3 +45,5 @@ private:
 	double refreshedAt_ = 0;
 	bool closed_ = false;
 };
+
+} // namespace sarxina
