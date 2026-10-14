@@ -63,12 +63,14 @@ private:
 
 	void paintPanel(QPainter &g, double now);
 	void paintButton(QPainter &g, const sling::Button &button, double deviceScale);
+	void paintHead(QPainter &g, double deviceScale);
 	void paintPowerOff(QPainter &g, double now);
 	const QImage &buttonShadow(double deviceScale);
 	const QImage &headAt(int devicePixels);
 
 	void openMenu();
 	void setPractice(bool practice);
+	void setPlayMode(sling::PlayMode mode);
 	void chooseHead();
 	void resetHead();
 	void loadHead();
@@ -88,9 +90,11 @@ private:
 	bool listening_ = false;
 
 	Face label_, heading_, toast_, status_, gear_;
+	double widestLabel_ = 0; // the longest text a button can show, in the label font
 	QImage head_;       // the picture on the slingshot, already cut to a circle
 	QImage headScaled_; // head_ at the size it is drawn
 	bool customHead_ = false;
 	QImage shadow_;     // the soft shadow under a button
 	double shadowScale_ = 0;
+	double shadowWidth_ = 0;
 };

@@ -18,3 +18,5 @@ Needs OBS Studio 32.2 or newer on Windows.
 ### Use
 
 Pull the head back with the mouse and let go. Whatever it hits gets pressed.
+
+For Plinko, pick it in the gear menu or press 3. Click to drop the head, and the button it lands on gets pressed.

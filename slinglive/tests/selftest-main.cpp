@@ -1,5 +1,5 @@
-// Runs SlingLive's self-test without OBS: the scripted flings, and pictures of the dock painted into PNG files.
-// Nothing is shown on screen.
+// Runs SlingLive's self-test without OBS: the scripted flings, the Plinko drops, and pictures of the dock painted
+// into PNG files. Nothing is shown on screen.
 //
 //   slinglive-selftest <en-US.ini> [folder for pictures]
 

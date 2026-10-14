@@ -4,6 +4,8 @@
 // Everything is laid out in a logical space 640 units wide; the height follows the shape of the dock.
 #pragma once
 
+#include "plinko.hpp"
+
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -23,7 +25,7 @@ inline constexpr double kStep = 1.0 / 120.0; // seconds per physics step
 
 enum class ButtonId { Stream, Exit, Record, VirtualCam, Studio, Settings };
 enum class ButtonState { Floating, Knocked };
-enum class PlayMode { Slingshot, FloatingButtons };
+enum class PlayMode { Slingshot, FloatingButtons, Plinko };
 enum class ShotState { Ready, Drag, Fly, Done };
 
 struct Point {
@@ -96,6 +98,8 @@ public:
 	double ground() const { return height_ - 30.0; }
 	Point fork() const { return {118.0, height_ - 118.0}; }
 	Point home(const Button &button) const;
+	// How wide the buttons are: narrower in Plinko, where each one sits in a slot.
+	double buttonWidth() const;
 	// Launch speed per unit of pull: a full pull straight down just reaches the top of the panel, however tall it is.
 	double power() const;
 
@@ -105,8 +109,8 @@ public:
 	void pointerMove(double x, double y);
 	void pointerUp();
 
-	void useFloatingButtons(double now); // key 1
-	void useSlingshot(double now);       // key 2
+	void setMode(PlayMode mode);         // without a toast, for the play style the dock remembers
+	void use(PlayMode mode, double now); // keys 1 (floating buttons), 2 (slingshot) and 3 (Plinko)
 	void reset(double now);              // key R
 	void powerOff(double now);           // key X, and a hit on Exit
 
@@ -114,12 +118,15 @@ public:
 
 	// For drawing
 	PlayMode mode() const { return mode_; }
+	Plinko &plinko() { return plinko_; }
+	const Plinko &plinko() const { return plinko_; }
 	const std::array<Button, 6> &buttons() const { return buttons_; }
 	const Shot &shot() const { return shot_; }
 	const std::vector<Particle> &particles() const { return particles_; }
 	Panel &panel() { return panel_; }
 	const Panel &panel() const { return panel_; }
-	const char *label(const Button &button) const; // locale key
+	static const char *label(ButtonId id, bool on); // locale key
+	const char *label(const Button &button) const { return label(button.id, isOn(button)); }
 	bool isOn(const Button &button) const;
 	const char *toast() const { return toast_; } // locale key, or nullptr
 	double toastAt() const { return toastAt_; }
@@ -132,12 +139,15 @@ private:
 	void place();
 	void reload();
 	void press(Button &button, double now);
+	void hit(Button &button, double now);
+	void land(double now);
 	void knock(Button &button, double vx, double vy);
 	void burst(double x, double y, int count, uint32_t rgb);
 	void showToast(const char *key, double now);
 
 	std::array<Button, 6> buttons_;
 	Shot shot_;
+	Plinko plinko_;
 	std::vector<Particle> particles_;
 	Panel panel_;
 	PlayMode mode_ = PlayMode::Slingshot;

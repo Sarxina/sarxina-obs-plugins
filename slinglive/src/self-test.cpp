@@ -9,7 +9,10 @@
 #include <QImage>
 #include <QString>
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -36,6 +39,31 @@ const std::vector<Fling> kFlings = {
 // The buttons bob gently in place, so every fling is tried with the bobbing at many different points.
 constexpr int kClockOffsets = 57;
 constexpr double kClockOffsetMs = 100;
+
+// Plinko is tried on the lowest panel there is, on the usual one and on a tall one, with the head dropped from
+// places spread evenly across each.
+constexpr double kPlinkoHeights[] = {kMinHeight, kPanelHeight, 640};
+constexpr int kDrops = 31;
+constexpr double kDropMargin = 19; // the head does not hang any closer to the walls
+constexpr double kDropSeconds = 8; // every drop has to be down in a slot by then
+constexpr uint32_t kPlinkoSeed = 1;
+constexpr double kPlinkoPictureX = 250; // where the head is dropped from in the pictures
+
+struct Drop {
+	std::vector<ButtonId> pressed;
+	double seconds = -1; // until the head was down in a slot; negative if it never was
+	int calls = 0;       // made to the host
+};
+
+// Stands in for OBS and counts what it is asked to do.
+struct CountingHost : Host {
+	int calls = 0;
+	void setStreaming(bool) override { calls++; }
+	void setRecording(bool) override { calls++; }
+	void setVirtualCam(bool) override { calls++; }
+	void setStudioMode(bool) override { calls++; }
+	void openSettings() override { calls++; }
+};
 
 const char *name(ButtonId id)
 {
@@ -132,6 +160,80 @@ bool flings()
 	return passed == total;
 }
 
+// Drops the head into the Plinko board at x and plays on until it is back at the top.
+Drop drop(double height, double x, bool practice)
+{
+	CountingHost host;
+	Game game;
+	game.setPractice(practice);
+	game.setHost(&host);
+	game.setHeight(height);
+	game.setMode(PlayMode::Plinko);
+	game.plinko().seed(kPlinkoSeed);
+	Drop result;
+	game.setPressObserver([&result](ButtonId id) { result.pressed.push_back(id); });
+
+	double now = 0;
+	const auto step = [&] {
+		now += kStep * 1000.0;
+		game.step(kStep, now);
+	};
+
+	game.pointerDown(x, 0, now);
+	while (game.shot().state == ShotState::Fly && now < kDropSeconds * 1000.0)
+		step();
+	if (game.shot().state != ShotState::Fly)
+		result.seconds = now / 1000.0;
+	for (int i = 0; i < 120 * 15 && (game.shot().state != ShotState::Ready || game.poweredOff()); i++)
+		step();
+	result.calls = host.calls;
+	return result;
+}
+
+bool drops()
+{
+	const int slotCount = Game().plinko().slotCount();
+	int passed = 0, practiceCalls = 0, realCalls = 0, realPresses = 0;
+	for (const double height : kPlinkoHeights) {
+		int landed = 0;
+		double slowest = 0;
+		std::set<ButtonId> reached;
+		for (int i = 0; i < kDrops; i++) {
+			const double x = kDropMargin + i * (kWidth - 2 * kDropMargin) / (kDrops - 1);
+			const Drop practice = drop(height, x, true);
+			practiceCalls += practice.calls;
+			if (practice.seconds >= 0 && practice.pressed.size() == 1) {
+				landed++;
+				slowest = std::max(slowest, practice.seconds);
+				reached.insert(practice.pressed[0]);
+			}
+			// The same drop in real mode, where the press has to reach the host. Exit asks nothing of it.
+			const Drop real = drop(height, x, false);
+			realCalls += real.calls;
+			realPresses += real.pressed.size() == 1 && real.pressed[0] != ButtonId::Exit;
+		}
+
+		const int reachedSlots = static_cast<int>(reached.size());
+		const bool ok = landed == kDrops && reachedSlots == slotCount;
+		passed += ok;
+		blog(ok ? LOG_INFO : LOG_WARNING,
+		     "[slinglive] self-test: Plinko, %.0f x %.0f panel, %d drops -> %d came down in one slot each (the slowest after %.1f seconds), %d of %d slots reached: %s",
+		     kPanelWidth, height, kDrops, landed, slowest, reachedSlots, slotCount, ok ? "OK" : "DIFFERENT");
+	}
+
+	const bool quiet = practiceCalls == 0 && realCalls > 0 && realCalls == realPresses;
+	blog(quiet ? LOG_INFO : LOG_WARNING,
+	     "[slinglive] self-test: Plinko, practice mode -> %d calls to OBS (real mode, with a stand-in for OBS: %d calls for %d presses): %s",
+	     practiceCalls, realCalls, realPresses, quiet ? "OK" : "DIFFERENT");
+
+	const int total = static_cast<int>(std::size(kPlinkoHeights));
+	const bool all = passed == total && quiet;
+	blog(all ? LOG_INFO : LOG_WARNING,
+	     "[slinglive] self-test: Plinko %s (%d of %d panels as expected, practice mode %s)",
+	     all ? "passed" : "FAILED", passed, total, quiet ? "as expected" : "DIFFERENT");
+	return all;
+}
+
 // Paints the dock, never shown, in the states worth looking at.
 void pictures(const QString &folder)
 {
@@ -178,7 +280,7 @@ void pictures(const QString &folder)
 		dock.advance(7.0);
 		save(dock, "04-live-and-recording");
 
-		dock.game().useFloatingButtons(dock.clock());
+		dock.game().use(PlayMode::FloatingButtons, dock.clock());
 		dock.advance(1.2);
 		save(dock, "05-floating-buttons");
 	}
@@ -198,6 +300,38 @@ void pictures(const QString &folder)
 		until(1.15, "09-power-off-dot");
 		until(3.45, "10-power-off-coming-back");
 	}
+	{
+		SlingDock dock(SlingDock::Use::SelfTest);
+		newDock(dock);
+		Game &game = dock.game();
+		game.setMode(PlayMode::Plinko);
+		game.plinko().seed(kPlinkoSeed);
+		game.pointerMove(kPlinkoPictureX, 0);
+		save(dock, "11-plinko-ready");
+
+		int presses = 0;
+		game.setPressObserver([&presses](ButtonId) { presses++; });
+		game.pointerDown(kPlinkoPictureX, 0, dock.clock());
+		dock.advance(1.0);
+		save(dock, "12-plinko-falling");
+
+		for (int i = 0; i < 120 * kDropSeconds && presses == 0; i++)
+			dock.advance(kStep);
+		dock.advance(0.08);
+		save(dock, "13-plinko-landed");
+	}
+	// The board again at the smallest size the dock goes to, on the lowest panel and on a tall one.
+	const struct {
+		int width, height;
+		const char *title;
+	} shapes[] = {{240, 160, "14-plinko-smallest"}, {640, 260, "15-plinko-low"}, {400, 640, "16-plinko-tall"}};
+	for (const auto &shape : shapes) {
+		SlingDock dock(SlingDock::Use::SelfTest);
+		dock.setPanelSize(shape.width, shape.height);
+		dock.game().setMode(PlayMode::Plinko);
+		dock.advance(0.5);
+		save(dock, shape.title);
+	}
 
 	blog(LOG_INFO, "[slinglive] self-test: wrote %d pictures of the dock to %s", written, folder.toUtf8().constData());
 }
@@ -211,8 +345,9 @@ bool selfTestRequested()
 
 bool runSelfTest(const char *picturesFolder)
 {
-	const bool passed = flings();
+	const bool flung = flings();
+	const bool dropped = drops();
 	if (picturesFolder && *picturesFolder)
 		pictures(QString::fromUtf8(picturesFolder));
-	return passed;
+	return flung && dropped;
 }

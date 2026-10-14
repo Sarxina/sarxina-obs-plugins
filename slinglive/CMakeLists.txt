@@ -2,6 +2,11 @@ set(
   _slinglive_sources
   src/obs-bridge.cpp
   src/obs-bridge.hpp
+  src/panel-colors.hpp
+  src/plinko-paint.cpp
+  src/plinko-paint.hpp
+  src/plinko.cpp
+  src/plinko.hpp
   src/resources.qrc
   src/self-test.cpp
   src/self-test.hpp
@@ -13,7 +18,7 @@ set(
 
 sarxina_add_obs_plugin(
   slinglive
-  VERSION 1.0.0
+  VERSION 1.1.0
   DESCRIPTION "SlingLive dock for OBS Studio"
   DATA "${CMAKE_CURRENT_SOURCE_DIR}/data"
   SOURCES src/plugin-main.cpp ${_slinglive_sources}

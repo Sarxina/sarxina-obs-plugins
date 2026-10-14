@@ -37,6 +37,7 @@ Game::Game() : buttons_{{
 		b.driftX = (n % 2 ? 1 : -1) * (40 + n * 9);
 		b.driftY = (n % 3 - 1) * 34 + 22;
 	}
+	plinko_.fit(ground());
 	place();
 	reload();
 }
@@ -57,13 +58,21 @@ void Game::setPractice(bool practice)
 void Game::setHeight(double height)
 {
 	height_ = std::max(kMinHeight, height);
+	plinko_.fit(ground());
 	if (shot_.state == ShotState::Ready)
 		reload();
 }
 
 Point Game::home(const Button &b) const
 {
+	if (mode_ == PlayMode::Plinko)
+		return {plinko_.slotX(b.id), plinko_.slotY()};
 	return {kWidth * b.fx, 34.0 + (ground() - 74.0) * b.fy};
+}
+
+double Game::buttonWidth() const
+{
+	return mode_ == PlayMode::Plinko ? plinko_.buttonWidth() : kButtonW;
 }
 
 double Game::power() const
@@ -95,6 +104,8 @@ void Game::reload()
 	shot_.vx = shot_.vy = 0;
 	shot_.state = ShotState::Ready;
 	shot_.rotation = 0;
+	if (mode_ == PlayMode::Plinko)
+		plinko_.hang(shot_);
 }
 
 void Game::showToast(const char *key, double now)
@@ -121,15 +132,15 @@ void Game::knock(Button &b, double vx, double vy)
 	b.knockedFor = 0;
 }
 
-const char *Game::label(const Button &b) const
+const char *Game::label(ButtonId id, bool on)
 {
-	switch (b.id) {
+	switch (id) {
 	case ButtonId::Stream:
-		return panel_.streaming ? "StopStreaming" : "StartStreaming";
+		return on ? "StopStreaming" : "StartStreaming";
 	case ButtonId::Record:
-		return panel_.recording ? "StopRecording" : "StartRecording";
+		return on ? "StopRecording" : "StartRecording";
 	case ButtonId::VirtualCam:
-		return panel_.virtualCam ? "StopVirtualCam" : "StartVirtualCam";
+		return on ? "StopVirtualCam" : "StartVirtualCam";
 	case ButtonId::Studio:
 		return "StudioMode";
 	case ButtonId::Settings:
@@ -216,6 +227,27 @@ void Game::press(Button &b, double now)
 	}
 }
 
+// The head coming down on a button, from the slingshot or through the Plinko board.
+void Game::hit(Button &b, double now)
+{
+	press(b, now);
+	burst(shot_.x, shot_.y, 14, 0xffd24a);
+	shake_ = std::max(shake_, 0.5);
+}
+
+// Plinko: the head has reached the bottom, and the button in that slot is pressed.
+void Game::land(double now)
+{
+	shot_.state = ShotState::Done;
+	shot_.doneAt = now;
+	for (Button &b : buttons_) {
+		if (b.state == ButtonState::Floating && std::abs(b.x - shot_.x) < plinko_.slotWidth() / 2) {
+			hit(b, now);
+			break;
+		}
+	}
+}
+
 // The gag: everything falls over and the panel powers off like an old television. OBS itself stays open.
 void Game::powerOff(double now)
 {
@@ -236,23 +268,25 @@ void Game::powerOff(double now)
 	}
 }
 
-void Game::useFloatingButtons(double now)
+void Game::setMode(PlayMode mode)
 {
-	mode_ = PlayMode::FloatingButtons;
-	place();
-	for (Button &b : buttons_) {
-		b.vx = b.driftX * 1.6;
-		b.vy = b.driftY * 1.6;
-	}
-	showToast("Toast.FloatingButtons", now);
-}
-
-void Game::useSlingshot(double now)
-{
-	mode_ = PlayMode::Slingshot;
+	mode_ = mode;
 	place();
 	reload();
-	showToast("Toast.Slingshot", now);
+	if (mode == PlayMode::FloatingButtons) {
+		for (Button &b : buttons_) {
+			b.vx = b.driftX * 1.6;
+			b.vy = b.driftY * 1.6;
+		}
+	}
+}
+
+void Game::use(PlayMode mode, double now)
+{
+	setMode(mode);
+	showToast(mode == PlayMode::Slingshot ? "Toast.Slingshot"
+					      : mode == PlayMode::Plinko ? "Toast.Plinko" : "Toast.FloatingButtons",
+		  now);
 }
 
 void Game::reset(double now)
@@ -279,6 +313,12 @@ void Game::pointerDown(double x, double y, double now)
 		}
 		return;
 	}
+	if (mode_ == PlayMode::Plinko) {
+		plinko_.aim(shot_, x);
+		if (shot_.state == ShotState::Ready)
+			plinko_.drop(shot_);
+		return;
+	}
 	if (shot_.state == ShotState::Ready && std::hypot(x - shot_.x, y - shot_.y) < 46)
 		shot_.state = ShotState::Drag;
 }
@@ -286,6 +326,8 @@ void Game::pointerDown(double x, double y, double now)
 void Game::pointerMove(double x, double y)
 {
 	mouse_ = {x, y};
+	if (mode_ == PlayMode::Plinko)
+		plinko_.aim(shot_, x);
 	if (shot_.state != ShotState::Drag)
 		return;
 	const Point f = fork();
@@ -316,6 +358,7 @@ void Game::pointerUp()
 void Game::step(double dt, double now)
 {
 	const double gy = ground();
+	const double half = buttonWidth() / 2;
 
 	if (off_ && now - offAt_ >= kPowerOffSeconds * 1000.0) {
 		off_ = false;
@@ -367,8 +410,9 @@ void Game::step(double dt, double now)
 				}
 			} else {
 				const Point h = home(b);
-				b.x = h.x + std::sin(now / 900 + b.phase) * 5;
-				b.y = h.y + std::sin(now / 620 + b.phase * 2) * 7;
+				const double bob = mode_ == PlayMode::Plinko ? 0 : 1; // in a slot, a button keeps still
+				b.x = h.x + std::sin(now / 900 + b.phase) * 5 * bob;
+				b.y = h.y + std::sin(now / 620 + b.phase * 2) * 7 * bob;
 			}
 		} else {
 			b.knockedFor += dt;
@@ -386,12 +430,12 @@ void Game::step(double dt, double now)
 					b.angle += (std::floor(b.angle / kPi + 0.5) * kPi - b.angle) * 0.3; // settle flat
 				}
 			}
-			if (b.x < kButtonW / 2) {
-				b.x = kButtonW / 2;
+			if (b.x < half) {
+				b.x = half;
 				b.vx = std::abs(b.vx) * 0.5;
 			}
-			if (b.x > kWidth - kButtonW / 2) {
-				b.x = kWidth - kButtonW / 2;
+			if (b.x > kWidth - half) {
+				b.x = kWidth - half;
 				b.vx = -std::abs(b.vx) * 0.5;
 			}
 			if (b.knockedFor > kFloatBackSeconds && !off_) {
@@ -406,7 +450,10 @@ void Game::step(double dt, double now)
 		}
 	}
 
-	if (shot_.state == ShotState::Fly) {
+	if (mode_ == PlayMode::Plinko) {
+		if (shot_.state == ShotState::Fly && plinko_.fall(shot_, dt))
+			land(now);
+	} else if (shot_.state == ShotState::Fly) {
 		shot_.flying += dt;
 		shot_.vy += kGravity * dt;
 		shot_.x += shot_.vx * dt;
@@ -416,9 +463,7 @@ void Game::step(double dt, double now)
 			if (b.state != ButtonState::Floating || !inside(b, shot_.x, shot_.y, kHeadRadius))
 				continue;
 			knock(b, shot_.vx * 0.55, shot_.vy * 0.4 - 220);
-			press(b, now);
-			burst(shot_.x, shot_.y, 14, 0xffd24a);
-			shake_ = std::max(shake_, 0.5);
+			hit(b, now);
 			shot_.vx *= 0.62; // the head keeps going, so one shot can press several buttons
 			shot_.vy = shot_.vy * 0.5 - 60;
 		}

@@ -1,5 +1,8 @@
 #include "sling-dock.hpp"
 
+#include "panel-colors.hpp"
+#include "plinko-paint.hpp"
+
 #include <obs-module.h>
 #include <obs.hpp>
 #include <util/platform.h>
@@ -31,24 +34,21 @@ using namespace sling;
 
 namespace {
 
-// OBS's own dark theme
-const QColor kPanelColor(0x27, 0x2a, 0x33);
-const QColor kGroundColor(0x20, 0x23, 0x2b);
-const QColor kStatusBarColor(0x16, 0x18, 0x1d);
-const QColor kButtonColor(0x3c, 0x40, 0x4d);
-const QColor kButtonOnColor(0x28, 0x4c, 0xb8);
-const QColor kButtonEdgeColor(255, 255, 255, 20);
-const QColor kTextColor(0xfe, 0xfe, 0xfe);
-const QColor kFlashTextColor(0x1d, 0x1f, 0x26);
-const QColor kDimColor(0x9a, 0xa0, 0xad);
-const QColor kLiveColor(0xe0, 0x39, 0x3e);
-const QColor kIdleColor(0x5a, 0x5f, 0x6b);
-const QColor kWoodColor(0x8a, 0x5a, 0x2b);
-const QColor kBandColor(0x3b, 0x24, 0x16);
-const QColor kPlainHeadColor(0x5b, 0x7b, 0xd6);
+// The play styles, as the gear menu lists them and as the settings file names them.
+struct Style {
+	PlayMode mode;
+	const char *menu; // locale key
+	const char *setting;
+};
+const Style kStyles[] = {
+	{PlayMode::Slingshot, "Menu.Slingshot", "slingshot"},
+	{PlayMode::FloatingButtons, "Menu.FloatingButtons", "floating-buttons"},
+	{PlayMode::Plinko, "Menu.Plinko", "plinko"},
+};
 
 constexpr double kHeadDrawRadius = kHeadRadius + 3; // the picture is drawn a little larger than the head that hits
 constexpr int kHeadPictureSize = 256;               // a chosen picture is kept at this size
+constexpr double kLabelMargin = 5.0;                // the least room between a label and the ends of its button
 constexpr double kShadowBlur = 4.0;                 // device pixels
 constexpr double kShadowDrop = 3.0;                 // device pixels
 constexpr double kShadowOpacity = 0.45;
@@ -189,6 +189,12 @@ SlingDock::SlingDock(Use use, QWidget *parent) : QWidget(parent), use_(use)
 	gear_.font = panelFont({QStringLiteral("Segoe UI Symbol"), QStringLiteral("Segoe UI")}, 15);
 	for (Face *face : {&label_, &heading_, &toast_, &status_, &gear_})
 		face->baseline = baselineBelowMiddle(face->font);
+	for (const Button &button : game_.buttons()) {
+		for (const bool on : {false, true}) {
+			const QString label = text(Game::label(button.id, on));
+			widestLabel_ = std::max(widestLabel_, QFontMetricsF(label_.font).horizontalAdvance(label));
+		}
+	}
 
 	loadHead();
 	fitPanel();
@@ -253,16 +259,32 @@ void SlingDock::setPractice(bool practice)
 	update();
 }
 
+void SlingDock::setPlayMode(PlayMode mode)
+{
+	const bool changed = mode != game_.mode();
+	game_.use(mode, now());
+	if (changed)
+		saveSettings();
+	update();
+}
+
 void SlingDock::loadSettings()
 {
 	bool practice = false; // real mode unless the settings say otherwise
+	PlayMode mode = PlayMode::Slingshot;
 	BPtr<char> path(obs_module_config_path("config.json"));
 	if (path && os_file_exists(path)) {
 		OBSDataAutoRelease settings = obs_data_create_from_json_file_safe(path, "bak");
-		if (settings)
+		if (settings) {
 			practice = std::strcmp(obs_data_get_string(settings, "mode"), "practice") == 0;
+			for (const Style &style : kStyles) {
+				if (std::strcmp(obs_data_get_string(settings, "style"), style.setting) == 0)
+					mode = style.mode;
+			}
+		}
 	}
 	game_.setPractice(practice);
+	game_.setMode(mode);
 }
 
 void SlingDock::saveSettings() const
@@ -276,6 +298,10 @@ void SlingDock::saveSettings() const
 	os_mkdirs(folder);
 	OBSDataAutoRelease settings = obs_data_create();
 	obs_data_set_string(settings, "mode", game_.practice() ? "practice" : "real");
+	for (const Style &style : kStyles) {
+		if (style.mode == game_.mode())
+			obs_data_set_string(settings, "style", style.setting);
+	}
 	obs_data_save_json_safe(settings, path, "tmp", "bak");
 }
 
@@ -367,6 +393,15 @@ void SlingDock::openMenu()
 	practice->setChecked(game_.practice());
 	modes->addAction(practice);
 	menu.addSeparator();
+	auto *styles = new QActionGroup(&menu);
+	for (const Style &style : kStyles) {
+		QAction *action = menu.addAction(text(style.menu));
+		action->setCheckable(true);
+		action->setChecked(style.mode == game_.mode());
+		action->setData(static_cast<int>(style.mode));
+		styles->addAction(action);
+	}
+	menu.addSeparator();
 	QAction *choose = menu.addAction(text("Menu.ChooseHead"));
 	QAction *reset = menu.addAction(text("Menu.ResetHead"));
 	reset->setEnabled(customHead_);
@@ -382,6 +417,8 @@ void SlingDock::openMenu()
 		chooseHead();
 	else if (picked == reset)
 		resetHead();
+	else if (picked && picked->actionGroup() == styles)
+		setPlayMode(static_cast<PlayMode>(picked->data().toInt()));
 }
 
 // ---- time -----------------------------------------------------------------------------------------------------------
@@ -504,10 +541,13 @@ void SlingDock::keyPressEvent(QKeyEvent *event)
 	const double t = now();
 	switch (event->key()) {
 	case Qt::Key_1:
-		game_.useFloatingButtons(t);
+		setPlayMode(PlayMode::FloatingButtons);
 		break;
 	case Qt::Key_2:
-		game_.useSlingshot(t);
+		setPlayMode(PlayMode::Slingshot);
+		break;
+	case Qt::Key_3:
+		setPlayMode(PlayMode::Plinko);
 		break;
 	case Qt::Key_R:
 		game_.reset(t);
@@ -542,12 +582,13 @@ QImage SlingDock::snapshot(qreal pixelRatio)
 
 const QImage &SlingDock::buttonShadow(double deviceScale)
 {
-	if (!shadow_.isNull() && std::abs(shadowScale_ - deviceScale) < 1e-6)
+	const double buttonW = game_.buttonWidth();
+	if (!shadow_.isNull() && std::abs(shadowScale_ - deviceScale) < 1e-6 && shadowWidth_ == buttonW)
 		return shadow_;
 
 	// The button's shape in device pixels, with room around it for the blur.
 	const int margin = static_cast<int>(std::ceil(kShadowBlur * 3)) + 2;
-	const int width = static_cast<int>(std::ceil(kButtonW * deviceScale)) + margin * 2;
+	const int width = static_cast<int>(std::ceil(buttonW * deviceScale)) + margin * 2;
 	const int height = static_cast<int>(std::ceil(kButtonH * deviceScale)) + margin * 2;
 	QImage shape(width, height, QImage::Format_ARGB32_Premultiplied);
 	shape.fill(Qt::transparent);
@@ -556,8 +597,8 @@ const QImage &SlingDock::buttonShadow(double deviceScale)
 		g.setRenderHint(QPainter::Antialiasing);
 		g.setPen(Qt::NoPen);
 		g.setBrush(Qt::black);
-		g.drawRoundedRect(QRectF((width - kButtonW * deviceScale) / 2, (height - kButtonH * deviceScale) / 2,
-					 kButtonW * deviceScale, kButtonH * deviceScale),
+		g.drawRoundedRect(QRectF((width - buttonW * deviceScale) / 2, (height - kButtonH * deviceScale) / 2,
+					 buttonW * deviceScale, kButtonH * deviceScale),
 				  4 * deviceScale, 4 * deviceScale);
 	}
 
@@ -578,6 +619,7 @@ const QImage &SlingDock::buttonShadow(double deviceScale)
 		}
 	}
 	shadowScale_ = deviceScale;
+	shadowWidth_ = buttonW;
 	return shadow_;
 }
 
@@ -592,15 +634,36 @@ void SlingDock::paintButton(QPainter &g, const Button &button, double deviceScal
 	g.drawImage(QRectF(-shadowW / 2, -shadowH / 2, shadowW, shadowH), shadow);
 	g.restore();
 
+	const double width = game_.buttonWidth();
 	const bool flash = button.flash > 0;
 	g.save();
 	g.translate(button.x, button.y);
 	g.rotate(degrees(button.angle));
 	g.setPen(QPen(kButtonEdgeColor, 1));
 	g.setBrush(flash ? QColor(Qt::white) : game_.isOn(button) ? kButtonOnColor : kButtonColor);
-	g.drawRoundedRect(QRectF(-kButtonW / 2, -kButtonH / 2, kButtonW, kButtonH), 4, 4);
+	g.drawRoundedRect(QRectF(-width / 2, -kButtonH / 2, width, kButtonH), 4, 4);
+	// On a narrow button the labels shrink, all of them alike, by what the longest one needs to fit.
+	if (const double fit = (width - 2 * kLabelMargin) / widestLabel_; fit < 1)
+		g.scale(fit, fit);
 	drawText(g, text(game_.label(button)), label_.font, label_.baseline, 0, 1, Qt::AlignHCenter,
 		 flash ? kFlashTextColor : kTextColor);
+	g.restore();
+}
+
+void SlingDock::paintHead(QPainter &g, double deviceScale)
+{
+	const Shot &shot = game_.shot();
+	g.save();
+	g.translate(shot.x, shot.y);
+	g.rotate(degrees(shot.rotation));
+	if (!head_.isNull()) {
+		const QImage &head = headAt(static_cast<int>(std::ceil(kHeadDrawRadius * 2 * deviceScale)));
+		g.drawImage(QRectF(-kHeadDrawRadius, -kHeadDrawRadius, kHeadDrawRadius * 2, kHeadDrawRadius * 2), head);
+	} else {
+		g.setPen(Qt::NoPen);
+		g.setBrush(kPlainHeadColor);
+		g.drawEllipse(QPointF(0, 0), kHeadRadius, kHeadRadius);
+	}
 	g.restore();
 }
 
@@ -631,6 +694,7 @@ void SlingDock::paintPanel(QPainter &g, double now)
 	const Point fork = game_.fork();
 	const Shot &shot = game_.shot();
 	const bool slingshot = game_.mode() == PlayMode::Slingshot;
+	const bool plinko = game_.mode() == PlayMode::Plinko;
 	const bool held = shot.state == ShotState::Drag || shot.state == ShotState::Ready;
 	const QPen band(kBandColor, 4, Qt::SolidLine, Qt::RoundCap);
 
@@ -662,23 +726,16 @@ void SlingDock::paintPanel(QPainter &g, double now)
 			}
 		}
 	}
+	if (plinko)
+		paintPlinko(g, game_.plinko());
 
 	for (const Button &button : game_.buttons())
 		paintButton(g, button, deviceScale);
 
-	if (slingshot && shot.state != ShotState::Done) {
-		g.save();
-		g.translate(shot.x, shot.y);
-		g.rotate(degrees(shot.rotation));
-		if (!head_.isNull()) {
-			const QImage &head = headAt(static_cast<int>(std::ceil(kHeadDrawRadius * 2 * deviceScale)));
-			g.drawImage(QRectF(-kHeadDrawRadius, -kHeadDrawRadius, kHeadDrawRadius * 2, kHeadDrawRadius * 2), head);
-		} else {
-			g.setPen(Qt::NoPen);
-			g.setBrush(kPlainHeadColor);
-			g.drawEllipse(QPointF(0, 0), kHeadRadius, kHeadRadius);
-		}
-		g.restore();
+	if (plinko) {
+		paintHead(g, deviceScale);
+	} else if (slingshot && shot.state != ShotState::Done) {
+		paintHead(g, deviceScale);
 		if (held) { // the near half of the band, in front of the head
 			g.setPen(band);
 			g.drawLine(QPointF(fork.x - 15, fork.y - 6), QPointF(shot.x, shot.y));
@@ -694,11 +751,12 @@ void SlingDock::paintPanel(QPainter &g, double now)
 	if (const char *toast = game_.toast(); toast && now - game_.toastAt() < kToastMs) {
 		const QString message = text(toast);
 		const double width = QFontMetricsF(toast_.font).horizontalAdvance(message) + 22;
+		const double top = plinko ? 2 : 28; // in Plinko the head hangs where the toast is otherwise shown
 		g.setOpacity(std::clamp((kToastMs - (now - game_.toastAt())) / 300.0, 0.0, 1.0));
 		g.setPen(Qt::NoPen);
 		g.setBrush(QColor(0, 0, 0, 153));
-		g.drawRoundedRect(QRectF(W / 2 - width / 2, 28, width, 24), 12, 12);
-		drawText(g, message, toast_.font, toast_.baseline, W / 2, 41, Qt::AlignHCenter, Qt::white);
+		g.drawRoundedRect(QRectF(W / 2 - width / 2, top, width, 24), 12, 12);
+		drawText(g, message, toast_.font, toast_.baseline, W / 2, top + 13, Qt::AlignHCenter, Qt::white);
 		g.setOpacity(1);
 	}
 	g.restore();
@@ -721,7 +779,7 @@ void SlingDock::paintPanel(QPainter &g, double now)
 	light(panel.recording ? kLiveColor : kIdleColor,
 	      panel.recording ? text("Status.Recording") + QLatin1Char(' ') + clockText(now - panel.recordingSince)
 			      : text("Status.NotRecording"));
-	QString hint = text(slingshot ? "Hint.Slingshot" : "Hint.FloatingButtons");
+	QString hint = text(slingshot ? "Hint.Slingshot" : plinko ? "Hint.Plinko" : "Hint.FloatingButtons");
 	if (game_.practice())
 		hint += QStringLiteral("   ") + text("Hint.Practice");
 	drawText(g, hint, status_.font, status_.baseline, W - 10, H - 9, Qt::AlignRight, kDimColor);
