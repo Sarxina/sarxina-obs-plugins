@@ -1,5 +1,5 @@
 <RCC>
-    <qresource prefix="/slinglive">
+    <qresource prefix="/sarxina">
         <file alias="head.png">resources/head.png</file>
     </qresource>
 </RCC>

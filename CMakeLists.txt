@@ -9,5 +9,7 @@ enable_testing()
 include(ObsDependencies)
 include(ObsPlugin)
 
-# One folder per plugin. To add a plugin, add its folder here.
+# The code the plugins share, then one folder per plugin. To add a plugin, add its folder here.
+add_subdirectory(shared)
 add_subdirectory(slinglive)
+add_subdirectory(plinkolive)

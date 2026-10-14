@@ -1,18 +1,21 @@
-// The SlingLive dock: draws the game, feeds it the mouse and the keys, and keeps it in step with OBS.
+// The dock each plugin here puts in OBS in place of the Controls panel: the shared panel with the plugin's game on
+// it. It feeds them the mouse, the keys and the time, keeps the panel in step with OBS, and remembers practice or
+// real mode between sessions.
 #pragma once
 
+#include "control-panel.hpp"
+#include "game.hpp"
 #include "obs-bridge.hpp"
-#include "sling-game.hpp"
+#include "panel-painter.hpp"
 
 #include <QElapsedTimer>
-#include <QFont>
 #include <QImage>
 #include <QTimer>
 #include <QWidget>
 
-class QPainter;
+namespace sarxina {
 
-class SlingDock : public QWidget {
+class ControlsDock : public QWidget {
 	Q_OBJECT
 
 public:
@@ -21,16 +24,16 @@ public:
 		SelfTest, // never shown: practice mode, its own clock, reads and writes no settings
 	};
 
-	explicit SlingDock(Use use = Use::Dock, QWidget *parent = nullptr);
-	~SlingDock() override;
+	explicit ControlsDock(std::unique_ptr<Game> game, Use use = Use::Dock, QWidget *parent = nullptr);
+	~ControlsDock() override;
 
 	QSize sizeHint() const override { return {640, 430}; }
 	QSize minimumSizeHint() const override { return {240, 160}; }
 
-	bool practice() const { return game_.practice(); }
+	bool practice() const { return panel_.practice(); }
 
 	// For the self-test, which runs the dock with nothing on screen.
-	sling::Game &game() { return game_; }
+	ControlPanel &panel() { return panel_; }
 	double clock() const { return now(); }
 	void setPanelSize(int width, int height);
 	void advance(double seconds);
@@ -47,50 +50,33 @@ protected:
 	void keyPressEvent(QKeyEvent *event) override;
 
 private:
-	// A font and where its baseline sits below the middle of a line of text.
-	struct Face {
-		QFont font;
-		double baseline = 0;
-	};
-
 	static void frontendEvent(enum obs_frontend_event event, void *self);
 	void onFrontendEvent(enum obs_frontend_event event);
+	// In real mode, reads what OBS is doing now and shows it.
+	void readObs();
 
 	double now() const;
 	void tick();
 	void fitPanel();
-	QPointF toPanel(const QPointF &position) const;
-
-	void paintPanel(QPainter &g, double now);
-	void paintButton(QPainter &g, const sling::Button &button, double deviceScale);
-	void paintPowerOff(QPainter &g, double now);
-	const QImage &buttonShadow(double deviceScale);
-	const QImage &headAt(int devicePixels);
+	Point toPanel(const QPointF &position) const;
 
 	void openMenu();
 	void setPractice(bool practice);
-	void chooseHead();
-	void resetHead();
-	void loadHead();
-	void setHead(const QImage &picture);
 	void loadSettings();
 	void saveSettings() const;
 
 	Use use_;
-	sling::Game game_;
+	std::unique_ptr<Game> game_; // before panel_, which plays it
+	ControlPanel panel_;
 	ObsBridge bridge_;
+	PanelPainter painter_;
 
 	QTimer timer_;
 	QElapsedTimer elapsed_;
 	double testClock_ = 0; // milliseconds; the self-test's own clock
 	double last_ = 0;
-	double pending_ = 0;   // seconds of game time not yet stepped
+	double pending_ = 0; // seconds of panel time not yet stepped
 	bool listening_ = false;
-
-	Face label_, heading_, toast_, status_, gear_;
-	QImage head_;       // the picture on the slingshot, already cut to a circle
-	QImage headScaled_; // head_ at the size it is drawn
-	bool customHead_ = false;
-	QImage shadow_;     // the soft shadow under a button
-	double shadowScale_ = 0;
 };
+
+} // namespace sarxina

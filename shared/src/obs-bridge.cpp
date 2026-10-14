@@ -5,6 +5,8 @@
 #include <QMainWindow>
 #include <QTimer>
 
+namespace sarxina {
+
 namespace {
 
 // How long a stream may sit in "asked for" or "connecting" with no word from OBS before the panel gives up on it.
@@ -12,8 +14,8 @@ namespace {
 constexpr double kRequestTimeoutMs = 10000.0;
 constexpr double kStartingTimeoutMs = 30000.0;
 
-// Calls into OBS are made from the event loop rather than from inside the game's own step: OBS may answer with a
-// dialog of its own, and the game must not be half way through a step while that dialog is open.
+// Calls into OBS are made from the event loop rather than from inside the panel's own step: OBS may answer with a
+// dialog of its own, and the panel must not be half way through a step while that dialog is open.
 template<typename Call> void later(Call call)
 {
 	QTimer::singleShot(0, qApp, call);
@@ -36,7 +38,7 @@ void ObsBridge::handleEvent(enum obs_frontend_event event, double now)
 		streamSince_ = now;
 		if (stopWhenLive_) {
 			stopWhenLive_ = false;
-			later([] { obs_frontend_streaming_stop(); });
+			later(obs_frontend_streaming_stop);
 		}
 		break;
 	case OBS_FRONTEND_EVENT_STREAMING_STOPPED:
@@ -106,22 +108,43 @@ void ObsBridge::refresh(double now)
 	studioMode_ = obs_frontend_preview_program_mode_active();
 }
 
-void ObsBridge::apply(sling::Panel &panel) const
+void ObsBridge::apply(PanelState &state) const
 {
 	const bool starting = stream_ == Stream::Requested || stream_ == Stream::Starting;
-	panel.streaming = stream_ == Stream::Live || (starting && !stopWhenLive_);
-	panel.connecting = starting;
-	panel.liveSince = streamSince_;
-	panel.recording = recording_;
-	panel.recordingSince = recordingSince_;
-	panel.virtualCam = virtualCam_;
-	panel.studioMode = studioMode_;
+	state.set(Control::Stream, stream_ == Stream::Live || (starting && !stopWhenLive_), streamSince_);
+	state.connecting = starting;
+	state.set(Control::Record, recording_, recordingSince_);
+	state.on[index(Control::VirtualCam)] = virtualCam_;
+	state.on[index(Control::Studio)] = studioMode_;
+}
+
+void ObsBridge::press(Control control, bool on)
+{
+	if (closed_)
+		return;
+	switch (control) {
+	case Control::Stream:
+		setStreaming(on);
+		break;
+	case Control::Record:
+		later(on ? obs_frontend_recording_start : obs_frontend_recording_stop);
+		break;
+	case Control::VirtualCam:
+		later(on ? obs_frontend_start_virtualcam : obs_frontend_stop_virtualcam);
+		break;
+	case Control::Studio:
+		later([on] { obs_frontend_set_preview_program_mode(on); });
+		break;
+	case Control::Settings:
+		openSettings();
+		break;
+	case Control::Exit: // the gag never closes OBS
+		break;
+	}
 }
 
 void ObsBridge::setStreaming(bool on)
 {
-	if (closed_)
-		return;
 	const bool starting = stream_ == Stream::Requested || stream_ == Stream::Starting;
 	if (on) {
 		if (starting) {
@@ -129,47 +152,18 @@ void ObsBridge::setStreaming(bool on)
 		} else if (stream_ == Stream::Offline) {
 			stream_ = Stream::Requested;
 			streamSince_ = now_;
-			later([] { obs_frontend_streaming_start(); });
+			later(obs_frontend_streaming_start);
 		}
 	} else if (starting) {
 		// OBS cannot cancel a stream that is still connecting, so stop it the moment it is live.
 		stopWhenLive_ = true;
 	} else if (stream_ == Stream::Live) {
-		later([] { obs_frontend_streaming_stop(); });
+		later(obs_frontend_streaming_stop);
 	}
-}
-
-void ObsBridge::setRecording(bool on)
-{
-	if (closed_)
-		return;
-	if (on)
-		later([] { obs_frontend_recording_start(); });
-	else
-		later([] { obs_frontend_recording_stop(); });
-}
-
-void ObsBridge::setVirtualCam(bool on)
-{
-	if (closed_)
-		return;
-	if (on)
-		later([] { obs_frontend_start_virtualcam(); });
-	else
-		later([] { obs_frontend_stop_virtualcam(); });
-}
-
-void ObsBridge::setStudioMode(bool on)
-{
-	if (closed_)
-		return;
-	later([on] { obs_frontend_set_preview_program_mode(on); });
 }
 
 void ObsBridge::openSettings()
 {
-	if (closed_)
-		return;
 	// The frontend API has no call for this, so use the same action as File > Settings.
 	later([] {
 		auto *window = static_cast<QMainWindow *>(obs_frontend_get_main_window());
@@ -179,3 +173,5 @@ void ObsBridge::openSettings()
 			action->trigger();
 	});
 }
+
+} // namespace sarxina
