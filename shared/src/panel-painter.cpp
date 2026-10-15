@@ -256,10 +256,10 @@ void PanelPainter::paintToast(QPainter &g, const ControlPanel &panel, double now
 }
 
 // The status strip, like the bar along the bottom of OBS.
-void PanelPainter::paintStatus(QPainter &g, const ControlPanel &panel, double now)
+void PanelPainter::paintStatus(QPainter &g, const ControlPanel &panel, double now, double side)
 {
 	const double W = kWidth, H = panel.height();
-	g.fillRect(QRectF(0, H - 20, W, 20), kStatusBarColor);
+	g.fillRect(QRectF(-side, H - 20, W + 2 * side, 20), kStatusBarColor);
 	double x = 10;
 	const auto light = [&](const QColor &color, const QString &words) {
 		g.setPen(Qt::NoPen);
@@ -287,21 +287,22 @@ void PanelPainter::paintStatus(QPainter &g, const ControlPanel &panel, double no
 
 // The panel powering off like an old television: two bars close to a white line, the line shrinks to a dot, the dot
 // fades, and after a while the picture comes back.
-void PanelPainter::paintPowerOff(QPainter &g, const ControlPanel &panel, double now) const
+void PanelPainter::paintPowerOff(QPainter &g, const ControlPanel &panel, double now, double side) const
 {
 	if (!panel.poweredOff())
 		return;
 	const double W = kWidth, H = panel.height();
+	const double left = -side, across = W + 2 * side;
 	const double t = (now - panel.poweredOffAt()) / 1000.0;
 	g.setPen(Qt::NoPen);
 	if (t > 0.5 && t < 3.3) {
 		const double closed = std::min(1.0, (t - 0.5) / 0.28);
 		const double bar = H * closed / 2;
-		g.fillRect(QRectF(0, 0, W, closed >= 1 ? H : bar), Qt::black);
-		g.fillRect(QRectF(0, H - bar, W, bar), Qt::black);
+		g.fillRect(QRectF(left, 0, across, closed >= 1 ? H : bar), Qt::black);
+		g.fillRect(QRectF(left, H - bar, across, bar), Qt::black);
 		if (closed >= 1) {
 			const double shrunk = std::min(1.0, (t - 0.78) / 0.25);
-			g.fillRect(QRectF(W / 2 * shrunk, H / 2 - 1, W * (1 - shrunk), 2), Qt::white);
+			g.fillRect(QRectF(left + across / 2 * shrunk, H / 2 - 1, across * (1 - shrunk), 2), Qt::white);
 			if (t < 1.3) {
 				g.setOpacity(std::clamp(1.0 - (t - 1.03) / 0.27, 0.0, 1.0));
 				g.setBrush(Qt::white);
@@ -312,22 +313,24 @@ void PanelPainter::paintPowerOff(QPainter &g, const ControlPanel &panel, double 
 	}
 	if (t >= 3.3) {
 		g.setOpacity(std::clamp(1.0 - (t - 3.3) / 0.3, 0.0, 1.0));
-		g.fillRect(QRectF(0, 0, W, H), Qt::black);
+		g.fillRect(QRectF(left, 0, across, H), Qt::black);
 		g.setOpacity(1);
 	}
 }
 
-void PanelPainter::paint(QPainter &g, const ControlPanel &panel, double now, double scale)
+void PanelPainter::paint(QPainter &g, const ControlPanel &panel, double now, double scale, double left)
 {
 	if (scale <= 0)
 		return;
 	const double W = kWidth, H = panel.height();
+	const double side = left / scale; // panel units beside the panel, on each side
 	const double deviceScale = scale * g.device()->devicePixelRatioF();
 	const Game &game = panel.game();
 
 	g.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+	g.translate(left, 0);
 	g.scale(scale, scale);
-	g.fillRect(QRectF(0, 0, W, H), kPanelColor);
+	g.fillRect(QRectF(-side, 0, W + 2 * side, H), kPanelColor);
 
 	g.save(); // everything from here to the matching restore shakes on a hit
 	if (const double shake = panel.shake() * 7; shake > 0) {
@@ -338,7 +341,7 @@ void PanelPainter::paint(QPainter &g, const ControlPanel &panel, double now, dou
 	drawText(g, text("Controls"), heading_.font, heading_.baseline, 10, 14, Qt::AlignLeft, kDimColor);
 	drawText(g, QString(QChar(0x2699)), gear_.font, gear_.baseline, kGear.x, kGear.y + 1, Qt::AlignHCenter,
 		 kDimColor);
-	g.fillRect(QRectF(0, panel.ground(), W, H - panel.ground()), kGroundColor);
+	g.fillRect(QRectF(-side, panel.ground(), W + 2 * side, H - panel.ground()), kGroundColor);
 
 	game.paintBehind(g, panel);
 	for (const Button &button : panel.buttons())
@@ -355,8 +358,8 @@ void PanelPainter::paint(QPainter &g, const ControlPanel &panel, double now, dou
 	paintToast(g, panel, now);
 	g.restore();
 
-	paintStatus(g, panel, now);
-	paintPowerOff(g, panel, now);
+	paintStatus(g, panel, now, side);
+	paintPowerOff(g, panel, now, side);
 }
 
 } // namespace sarxina

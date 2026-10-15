@@ -20,7 +20,8 @@ namespace sarxina {
 class Game;
 
 inline constexpr double kWidth = 640.0;
-inline constexpr double kMinHeight = 260.0;
+inline constexpr double kMinHeight = 260.0;  // unless the game needs more (Game::minHeight)
+inline constexpr double kBelowGround = 30.0; // the floor's edge and the status strip
 inline constexpr double kButtonW = 138.0;
 inline constexpr double kButtonH = 28.0;
 inline constexpr double kHeadRadius = 15.0;
@@ -79,7 +80,8 @@ public:
 
 	void setHeight(double height);
 	double height() const { return height_; }
-	double ground() const { return height_ - 30.0; }
+	double minHeight() const;
+	double ground() const { return height_ - kBelowGround; }
 	double buttonWidth() const;
 
 	// All times are the caller's clock in milliseconds.

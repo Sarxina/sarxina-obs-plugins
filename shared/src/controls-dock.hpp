@@ -73,6 +73,8 @@ private:
 
 	QTimer timer_;
 	QElapsedTimer elapsed_;
+	double scale_ = 0;     // pixels per panel unit
+	double left_ = 0;      // pixels from the dock's left edge to the panel's
 	double testClock_ = 0; // milliseconds; the self-test's own clock
 	double last_ = 0;
 	double pending_ = 0; // seconds of panel time not yet stepped

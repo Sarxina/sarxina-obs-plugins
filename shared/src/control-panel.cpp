@@ -22,6 +22,7 @@ ControlPanel::ControlPanel(Game &game) : game_(&game), rng_(std::random_device{}
 {
 	for (size_t i = 0; i < buttons_.size(); i++)
 		buttons_[i].control = static_cast<Control>(i);
+	height_ = std::max(height_, minHeight());
 	game.fit(*this);
 	restart();
 }
@@ -39,9 +40,14 @@ void ControlPanel::setPractice(bool practice)
 	state_ = PanelState{}; // practice starts with everything off; in real mode the dock fills this in from OBS
 }
 
+double ControlPanel::minHeight() const
+{
+	return game_->minHeight();
+}
+
 void ControlPanel::setHeight(double height)
 {
-	height_ = std::max(kMinHeight, height);
+	height_ = std::max(minHeight(), height);
 	game_->fit(*this);
 	if (head_.state == HeadState::Ready)
 		reload();
