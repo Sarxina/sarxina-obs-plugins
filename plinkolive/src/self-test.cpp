@@ -154,7 +154,7 @@ void pictures(const char *folder)
 		int presses = 0;
 		panel.setPressObserver([&presses](Control) { presses++; });
 		panel.pointerDown({0, 0}, dock.clock());
-		dock.advance(0.8);
+		dock.advance(1.5);
 		pictures.save(dock, "02-falling");
 
 		for (int i = 0; i < 120 * kDropSeconds && presses == 0; i++)

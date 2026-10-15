@@ -12,15 +12,15 @@ namespace {
 
 constexpr double kSlotWidth = kWidth / kControlCount;
 constexpr double kSlotInset = 4.0;        // between a button and the sides and the floor of its slot
-// One row fewer than there are slots. The pegs in a row stand a slot apart, so the bottom row has a peg over every
-// divider, and each way left or right down the triangle ends in a slot of its own.
-constexpr int kRows = static_cast<int>(kControlCount) - 1;
 constexpr Point kStart{kWidth / 2, 48.0}; // where the head hangs before a drop, over the top peg
 constexpr double kTopRowY = 76.0;
-// The board keeps this shape on every panel; a taller panel only makes the slots deeper. With the rows much closer,
-// nearly every drop ends in one of the middle two slots; much further apart, the head skips pegs and a few slots come
-// up far more often than the rest.
-constexpr double kRowGap = 64.0;
+// Nine rows, the pegs in a row two thirds of a slot apart. Every third peg of the bottom row stands over a divider,
+// and the other two dividers stand in the middle of a gap. The board keeps this shape on every panel; a taller panel
+// only makes the slots deeper. With the pegs half a slot apart, the head (30 across) barely fits between the pegs of
+// neighbouring rows: it slides down the outside of the triangle, and nearly every drop ends in an end slot.
+constexpr int kRows = 9;
+constexpr double kPegSpacing = kSlotWidth * 2 / 3;
+constexpr double kRowGap = 32.0;
 constexpr double kBottomRowY = kTopRowY + kRowGap * (kRows - 1);
 constexpr double kSlotRoom = 36.0;        // from the bottom row of pegs down to the buttons: the head, and some air
 constexpr double kPegRadius = 4.0;
@@ -60,7 +60,7 @@ void PlinkoBoard::fit(const ControlPanel &panel)
 // Peg i of a row, counted from the left. Row 0 is the top one; row r has r + 1 pegs.
 Point PlinkoBoard::peg(int row, int i)
 {
-	return {kStart.x + (i - row / 2.0) * kSlotWidth, kTopRowY + kRowGap * row};
+	return {kStart.x + (i - row / 2.0) * kPegSpacing, kTopRowY + kRowGap * row};
 }
 
 double PlinkoBoard::slotY() const
@@ -105,7 +105,7 @@ bool PlinkoBoard::fall(Head &head, double dt)
 				head.vx += (random() * 2 - 1) * kNudge;
 		}
 	}
-	// The dividers hang from the pegs of the bottom row.
+	// The dividers hang from the bottom row.
 	for (size_t slot = 1; slot < kControlCount; slot++) {
 		const double x = kSlotWidth * slot;
 		bounceOff(head, kHeadRadius, {x, kBottomRowY}, {x, ground_}, kDividerWidth / 2, kWallSpring);

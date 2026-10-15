@@ -69,10 +69,10 @@ A passing run looks like this:
 [SlingLive] self-test: pull 103 degrees, strength 80 -> Start Recording, Start Streaming, Studio Mode (same at 57 of 57 clock offsets; expected Start Recording, Start Streaming, Studio Mode: OK)
 [SlingLive] self-test: pull 138 degrees, strength 76 -> Start Streaming, Exit (same at 57 of 57 clock offsets; expected Start Streaming, Exit: OK)
 [SlingLive] self-test: passed (3 of 3 flings as expected)
-[PlinkoLive] self-test: 640 x 430 panel, 2000 drops from the top -> 2000 came down in one slot each (the slowest after 3.8 seconds): Start Streaming 4.4%, Start Recording 20.2%, Start Virtual Camera 25.9%, Studio Mode 25.9%, Settings 19.2%, Exit 4.5%: OK
-[PlinkoLive] self-test: 640 x 640 panel, the same 2000 drops -> 2000 came down in the same slot as on the 640 x 430 panel (the slowest after 4.2 seconds): OK
-[PlinkoLive] self-test: 640 x 1024 panel, the same 2000 drops -> 2000 came down in the same slot as on the 640 x 430 panel (the slowest after 4.6 seconds): OK
-[PlinkoLive] self-test: practice mode -> 0 calls to OBS (real mode, with a stand-in for OBS: 1911 calls for 1911 presses): OK
+[PlinkoLive] self-test: 640 x 430 panel, 2000 drops from the top -> 2000 came down in one slot each (the slowest after 5.4 seconds): Start Streaming 2.2%, Start Recording 13.2%, Start Virtual Camera 36.0%, Studio Mode 34.5%, Settings 11.2%, Exit 2.8%: OK
+[PlinkoLive] self-test: 640 x 640 panel, the same 2000 drops -> 2000 came down in the same slot as on the 640 x 430 panel (the slowest after 5.8 seconds): OK
+[PlinkoLive] self-test: 640 x 1024 panel, the same 2000 drops -> 2000 came down in the same slot as on the 640 x 430 panel (the slowest after 6.2 seconds): OK
+[PlinkoLive] self-test: practice mode -> 0 calls to OBS (real mode, with a stand-in for OBS: 1944 calls for 1944 presses): OK
 [PlinkoLive] self-test: passed (3 of 3 panels as expected, practice mode as expected)
 ```
 
