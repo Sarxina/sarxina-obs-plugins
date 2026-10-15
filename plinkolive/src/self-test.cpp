@@ -1,6 +1,7 @@
-// PlinkoLive's self-test (see self-test.hpp): the head is dropped from 31 places spread across the panel, on the
-// lowest panel there is, on the usual one and on a tall one. Every drop has to come down in one slot, every slot has
-// to be reached, and in practice mode nothing may reach OBS. Then pictures of the dock.
+// PlinkoLive's self-test (see self-test.hpp): the head is dropped from the top 2000 times, each time with the peg
+// nudges seeded differently. On the lowest panel there is, every drop has to press one button and every button has
+// to get at least one drop in a hundred. On two taller panels, where only the slots are deeper, every drop has to
+// press the same button as on the lowest. In practice mode nothing may reach OBS. Then pictures of the dock.
 
 #include "self-test.hpp"
 
@@ -8,8 +9,10 @@
 #include "plinko-board.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <iterator>
-#include <set>
+#include <string>
 #include <vector>
 
 using namespace sarxina;
@@ -17,12 +20,11 @@ using namespace sarxina;
 namespace {
 
 constexpr double kPanelWidth = 640;
-constexpr double kHeights[] = {kMinHeight, 430, 640};
-constexpr int kDrops = 31;
-constexpr double kDropMargin = 19; // the head does not hang any closer to the walls
-constexpr double kDropSeconds = 8; // every drop has to be down in a slot by then
-constexpr uint32_t kSeed = 1;
-constexpr double kPictureX = 250; // where the head is dropped from in the pictures
+constexpr double kTallerHeights[] = {640, 1024};
+constexpr int kDrops = 2000;
+constexpr double kLeastShare = 0.01; // of the drops, for every button
+constexpr double kDropSeconds = 8;   // every drop has to be down in a slot by then
+constexpr uint32_t kSeed = 1;        // for the pictures
 
 struct Drop {
 	std::vector<Control> pressed;
@@ -30,12 +32,12 @@ struct Drop {
 	int calls = 0;       // made to the host
 };
 
-// Drops the head at x and plays on until a new head is ready at the top.
-Drop drop(double height, double x, bool practice)
+// Drops the head and plays on until a new head is ready at the top.
+Drop drop(double height, uint32_t seed, bool practice)
 {
 	test::CountingHost host;
 	PlinkoBoard board;
-	board.seed(kSeed);
+	board.seed(seed);
 	ControlPanel panel(board);
 	panel.setPractice(practice);
 	panel.setHost(&host);
@@ -49,7 +51,7 @@ Drop drop(double height, double x, bool practice)
 		panel.step(kStep, now);
 	};
 
-	panel.pointerDown({x, 0}, now);
+	panel.pointerDown({0, 0}, now);
 	while (panel.head().state == HeadState::Flying && now < kDropSeconds * 1000.0)
 		step();
 	if (panel.head().state != HeadState::Flying)
@@ -60,35 +62,75 @@ Drop drop(double height, double x, bool practice)
 	return result;
 }
 
+// The one button a drop pressed, as its index in the button table, or -1.
+int button(const Drop &drop)
+{
+	return drop.seconds >= 0 && drop.pressed.size() == 1 ? static_cast<int>(index(drop.pressed[0])) : -1;
+}
+
 bool drops()
 {
-	int passed = 0, practiceCalls = 0, realCalls = 0, realPresses = 0;
-	for (const double height : kHeights) {
-		int landed = 0;
-		double slowest = 0;
-		std::set<Control> reached;
-		for (int i = 0; i < kDrops; i++) {
-			const double x = kDropMargin + i * (kWidth - 2 * kDropMargin) / (kDrops - 1);
-			const Drop practice = drop(height, x, true);
-			practiceCalls += practice.calls;
-			if (practice.seconds >= 0 && practice.pressed.size() == 1) {
-				landed++;
-				slowest = std::max(slowest, practice.seconds);
-				reached.insert(practice.pressed[0]);
-			}
-			// The same drop in real mode, where the press has to reach the host. Exit asks nothing of it.
-			const Drop real = drop(height, x, false);
-			realCalls += real.calls;
-			realPresses += real.pressed.size() == 1 && real.pressed[0] != Control::Exit;
+	const double lowest = PlinkoBoard().minHeight();
+	std::vector<int> pressed(kDrops);
+	std::array<int, kControlCount> perButton{};
+	int landed = 0, practiceCalls = 0, realCalls = 0, realPresses = 0;
+	double slowest = 0;
+	for (int i = 0; i < kDrops; i++) {
+		const auto seed = static_cast<uint32_t>(i + 1);
+		const Drop practice = drop(lowest, seed, true);
+		practiceCalls += practice.calls;
+		pressed[i] = button(practice);
+		if (pressed[i] >= 0) {
+			landed++;
+			perButton[static_cast<size_t>(pressed[i])]++;
+			slowest = std::max(slowest, practice.seconds);
 		}
+		// The same drop in real mode, where the press has to reach the host. Exit asks nothing of it.
+		const Drop real = drop(lowest, seed, false);
+		realCalls += real.calls;
+		realPresses += real.pressed.size() == 1 && real.pressed[0] != Control::Exit;
+	}
 
-		const int reachedSlots = static_cast<int>(reached.size());
-		const bool ok = landed == kDrops && reachedSlots == static_cast<int>(kControlCount);
+	// The buttons' shares, from left to right on the board.
+	std::array<Control, kControlCount> board{};
+	for (size_t i = 0; i < kControlCount; i++)
+		board[i] = static_cast<Control>(i);
+	PlinkoBoard plinko;
+	ControlPanel panel(plinko);
+	std::sort(board.begin(), board.end(),
+		  [&](Control a, Control b) { return plinko.home(panel, a).x < plinko.home(panel, b).x; });
+	std::string shares;
+	bool spread = true;
+	for (const Control control : board) {
+		const double share = static_cast<double>(perButton[index(control)]) / kDrops;
+		spread = spread && share >= kLeastShare;
+		char part[96];
+		std::snprintf(part, sizeof(part), "%s%s %.1f%%", shares.empty() ? "" : ", ", test::names({control}).c_str(),
+			      share * 100);
+		shares += part;
+	}
+	const bool lowestOk = landed == kDrops && spread;
+	test::report(lowestOk,
+		     "%.0f x %.0f panel, %d drops from the top -> %d pressed one button each (the slowest after %.1f seconds), left to right: %s: %s",
+		     kPanelWidth, lowest, kDrops, landed, slowest, shares.c_str(), lowestOk ? "OK" : "DIFFERENT");
+	int passed = lowestOk;
+
+	for (const double height : kTallerHeights) {
+		int same = 0;
+		double tallSlowest = 0;
+		for (int i = 0; i < kDrops; i++) {
+			const Drop tall = drop(height, static_cast<uint32_t>(i + 1), true);
+			practiceCalls += tall.calls;
+			if (pressed[i] >= 0 && button(tall) == pressed[i]) {
+				same++;
+				tallSlowest = std::max(tallSlowest, tall.seconds);
+			}
+		}
+		const bool ok = same == kDrops;
 		passed += ok;
 		test::report(ok,
-			     "%.0f x %.0f panel, %d drops -> %d came down in one slot each (the slowest after %.1f seconds), %d of %d slots reached: %s",
-			     kPanelWidth, height, kDrops, landed, slowest, reachedSlots, static_cast<int>(kControlCount),
-			     ok ? "OK" : "DIFFERENT");
+			     "%.0f x %.0f panel, the same %d drops -> %d pressed the same button as on the %.0f x %.0f panel (the slowest after %.1f seconds): %s",
+			     kPanelWidth, height, kDrops, same, kPanelWidth, lowest, tallSlowest, ok ? "OK" : "DIFFERENT");
 	}
 
 	const bool quiet = practiceCalls == 0 && realCalls > 0 && realCalls == realPresses;
@@ -96,7 +138,7 @@ bool drops()
 		     "practice mode -> %d calls to OBS (real mode, with a stand-in for OBS: %d calls for %d presses): %s",
 		     practiceCalls, realCalls, realPresses, quiet ? "OK" : "DIFFERENT");
 
-	const int total = static_cast<int>(std::size(kHeights));
+	const int total = 1 + static_cast<int>(std::size(kTallerHeights));
 	const bool all = passed == total && quiet;
 	test::report(all, "%s (%d of %d panels as expected, practice mode %s)", all ? "passed" : "FAILED", passed,
 		     total, quiet ? "as expected" : "DIFFERENT");
@@ -115,13 +157,12 @@ void pictures(const char *folder)
 		static_cast<PlinkoBoard &>(dock.panel().game()).seed(kSeed);
 		test::settle(dock);
 		ControlPanel &panel = dock.panel();
-		panel.pointerMove({kPictureX, 0});
 		pictures.save(dock, "01-ready");
 
 		int presses = 0;
 		panel.setPressObserver([&presses](Control) { presses++; });
-		panel.pointerDown({kPictureX, 0}, dock.clock());
-		dock.advance(1.0);
+		panel.pointerDown({0, 0}, dock.clock());
+		dock.advance(1.5);
 		pictures.save(dock, "02-falling");
 
 		for (int i = 0; i < 120 * kDropSeconds && presses == 0; i++)
@@ -129,7 +170,7 @@ void pictures(const char *folder)
 		dock.advance(0.08);
 		pictures.save(dock, "03-landed");
 	}
-	// The board again at the smallest size the dock goes to, on the lowest panel and on a tall one.
+	// The board again at the smallest size the dock goes to, in a low wide dock and in a tall one.
 	const struct {
 		int width, height;
 		const char *title;

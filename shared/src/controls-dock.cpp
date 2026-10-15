@@ -132,8 +132,7 @@ void ControlsDock::openMenu()
 	practice->setChecked(panel_.practice());
 	modes->addAction(practice);
 
-	const double scale = width() / kWidth;
-	const QPoint corner = mapToGlobal(QPoint(width(), qRound(27 * scale)));
+	const QPoint corner = mapToGlobal(QPoint(qRound(left_ + kWidth * scale_), qRound(27 * scale_)));
 	const QAction *picked = menu.exec(corner - QPoint(menu.sizeHint().width(), 0));
 	if (picked == real)
 		setPractice(false);
@@ -196,9 +195,13 @@ void ControlsDock::hideEvent(QHideEvent *event)
 
 void ControlsDock::fitPanel()
 {
-	// The panel is always kWidth units wide; the dock's shape decides the height.
-	if (width() > 0)
-		panel_.setHeight(height() * kWidth / width());
+	// The panel is always kWidth units wide, and the dock's shape decides the height. A dock too wide for the
+	// shortest panel the game fits on shows the whole panel at the dock's height, in the middle.
+	if (width() <= 0 || height() <= 0)
+		return;
+	scale_ = std::min(width() / kWidth, height() / panel_.minHeight());
+	left_ = (width() - kWidth * scale_) / 2;
+	panel_.setHeight(height() / scale_);
 }
 
 void ControlsDock::setPanelSize(int width, int height)
@@ -215,8 +218,9 @@ void ControlsDock::resizeEvent(QResizeEvent *event)
 
 Point ControlsDock::toPanel(const QPointF &position) const
 {
-	const double scale = width() > 0 ? kWidth / width() : 0;
-	return {position.x() * scale, position.y() * scale};
+	if (scale_ <= 0)
+		return {};
+	return {(position.x() - left_) / scale_, position.y() / scale_};
 }
 
 void ControlsDock::mousePressEvent(QMouseEvent *event)
@@ -272,7 +276,7 @@ void ControlsDock::keyPressEvent(QKeyEvent *event)
 void ControlsDock::paintEvent(QPaintEvent *)
 {
 	QPainter g(this);
-	painter_.paint(g, panel_, now(), width() / kWidth);
+	painter_.paint(g, panel_, now(), scale_, left_);
 }
 
 QImage ControlsDock::snapshot(qreal pixelRatio)
@@ -281,7 +285,7 @@ QImage ControlsDock::snapshot(qreal pixelRatio)
 	image.setDevicePixelRatio(pixelRatio);
 	image.fill(Qt::black);
 	QPainter g(&image);
-	painter_.paint(g, panel_, now(), width() / kWidth);
+	painter_.paint(g, panel_, now(), scale_, left_);
 	return image;
 }
 

@@ -21,6 +21,8 @@ public:
 	// Where each button stands, and how wide the buttons are.
 	virtual Point home(const ControlPanel &panel, Control control) const = 0;
 	virtual double buttonWidth() const { return kButtonW; }
+	// The shortest panel the game fits on. A dock too wide for it shows the whole panel in its middle.
+	virtual double minHeight() const { return kMinHeight; }
 	// The panel has changed height.
 	virtual void fit(const ControlPanel &) {}
 

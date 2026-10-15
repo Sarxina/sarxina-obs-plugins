@@ -20,8 +20,10 @@ class PanelPainter {
 public:
 	PanelPainter();
 
-	// `scale` is device-independent pixels per panel unit.
-	void paint(QPainter &g, const ControlPanel &panel, double now, double scale);
+	// `scale` is device-independent pixels per panel unit, `left` how many of those pixels lie between the left edge
+	// of what is painted and the panel's. The background, the floor, the status strip and the power-off reach across
+	// them, on both sides.
+	void paint(QPainter &g, const ControlPanel &panel, double now, double scale, double left);
 	// Whether a point, in panel units, is on the gear that opens the menu.
 	static bool overGear(Point p);
 
@@ -35,8 +37,8 @@ private:
 	void paintButton(QPainter &g, const ControlPanel &panel, const Button &button, double deviceScale);
 	void paintHead(QPainter &g, const Head &head, double deviceScale);
 	void paintToast(QPainter &g, const ControlPanel &panel, double now);
-	void paintStatus(QPainter &g, const ControlPanel &panel, double now);
-	void paintPowerOff(QPainter &g, const ControlPanel &panel, double now) const;
+	void paintStatus(QPainter &g, const ControlPanel &panel, double now, double side);
+	void paintPowerOff(QPainter &g, const ControlPanel &panel, double now, double side) const;
 	const QImage &buttonShadow(double buttonWidth, double deviceScale);
 	const QImage &headAt(int devicePixels);
 

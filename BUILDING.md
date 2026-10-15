@@ -7,7 +7,7 @@ The plugins are built for 64-bit Windows with CMake and Visual Studio 2022, the 
 Each plugin is a dock that stands in for OBS's Controls panel. Everything they have in common is in `shared\`, and each plugin's folder holds only what makes it different: its game.
 
 - `shared\src\control-panel` is the panel: the buttons, what a press does in practice and real mode, knocked-over buttons, sparks and the power-off gag. `controls.hpp` lists the buttons, `physics.hpp` has the falling and bouncing.
-- `shared\src\game.hpp` is what a plugin brings: where the buttons stand, how the head moves and what it hits, and what it draws.
+- `shared\src\game.hpp` is what a plugin brings: where the buttons stand, how the head moves and what it hits, what it draws, and how short its panel can be. A dock wider than that shows the whole panel in its middle.
 - `shared\src\controls-dock`, `panel-painter` and `obs-bridge` are the dock in OBS, how it looks, and the link to OBS.
 - `slinglive\src\slingshot` and `plinkolive\src\plinko-board` are the two games.
 
@@ -47,7 +47,7 @@ Versions used: Build Tools for Visual Studio 2022 17.13.6 (MSVC 19.43), CMake 3.
 Each zip is laid out like the OBS Studio folder, so extracting it into an OBS folder installs the plugin. For a portable copy of OBS:
 
 ```powershell
-tar -xf dist\plinkolive-1.0.0-windows-x64.zip -C "C:\path\to\portable-obs"
+tar -xf dist\plinkolive-1.1.0-windows-x64.zip -C "C:\path\to\portable-obs"
 ```
 
 Then start that OBS and tick the plugin under **Docks**.
@@ -57,7 +57,7 @@ Then start that OBS and tick the plugin under **Docks**.
 Each plugin has a check that needs no screen. Nothing in OBS is started or stopped.
 
 - **SlingLive** plays three scripted flings in practice mode, each with the bobbing buttons at 57 different points, and reports which buttons each one pressed.
-- **PlinkoLive** drops the head from 31 places across the panel, on panels of three heights, and reports whether each drop came down in one slot, whether every slot was reached, and that practice mode never reached OBS.
+- **PlinkoLive** drops the head from the top 2000 times, each with the random nudges at the pegs seeded differently, and reports what share of the drops pressed each button (every button has to get at least 1 in 100), that the same drops press the same buttons on two taller panels, and that practice mode never reached OBS.
 
 Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1` or `PLINKOLIVE_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (or the PlinkoLive one) for the pictures.
 
@@ -69,10 +69,10 @@ A passing run looks like this:
 [SlingLive] self-test: pull 103 degrees, strength 80 -> Start Recording, Start Streaming, Studio Mode (same at 57 of 57 clock offsets; expected Start Recording, Start Streaming, Studio Mode: OK)
 [SlingLive] self-test: pull 138 degrees, strength 76 -> Start Streaming, Exit (same at 57 of 57 clock offsets; expected Start Streaming, Exit: OK)
 [SlingLive] self-test: passed (3 of 3 flings as expected)
-[PlinkoLive] self-test: 640 x 260 panel, 31 drops -> 31 came down in one slot each (the slowest after 1.8 seconds), 6 of 6 slots reached: OK
-[PlinkoLive] self-test: 640 x 430 panel, 31 drops -> 31 came down in one slot each (the slowest after 3.7 seconds), 6 of 6 slots reached: OK
-[PlinkoLive] self-test: 640 x 640 panel, 31 drops -> 31 came down in one slot each (the slowest after 6.1 seconds), 6 of 6 slots reached: OK
-[PlinkoLive] self-test: practice mode -> 0 calls to OBS (real mode, with a stand-in for OBS: 80 calls for 80 presses): OK
+[PlinkoLive] self-test: 640 x 430 panel, 2000 drops from the top -> 2000 pressed one button each (the slowest after 5.4 seconds), left to right: Start Virtual Camera 2.2%, Studio Mode 13.2%, Start Streaming 36.0%, Start Recording 34.5%, Settings 11.2%, Exit 2.8%: OK
+[PlinkoLive] self-test: 640 x 640 panel, the same 2000 drops -> 2000 pressed the same button as on the 640 x 430 panel (the slowest after 5.8 seconds): OK
+[PlinkoLive] self-test: 640 x 1024 panel, the same 2000 drops -> 2000 pressed the same button as on the 640 x 430 panel (the slowest after 6.2 seconds): OK
+[PlinkoLive] self-test: practice mode -> 0 calls to OBS (real mode, with a stand-in for OBS: 1944 calls for 1944 presses): OK
 [PlinkoLive] self-test: passed (3 of 3 panels as expected, practice mode as expected)
 ```
 
