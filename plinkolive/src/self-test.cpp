@@ -1,7 +1,7 @@
 // PlinkoLive's self-test (see self-test.hpp): the head is dropped from the top 2000 times, each time with the peg
-// nudges seeded differently. On the lowest panel there is, every drop has to come down in one slot and every slot has
+// nudges seeded differently. On the lowest panel there is, every drop has to press one button and every button has
 // to get at least one drop in a hundred. On two taller panels, where only the slots are deeper, every drop has to
-// come down in the same slot as on the lowest. In practice mode nothing may reach OBS. Then pictures of the dock.
+// press the same button as on the lowest. In practice mode nothing may reach OBS. Then pictures of the dock.
 
 #include "self-test.hpp"
 
@@ -22,7 +22,7 @@ namespace {
 constexpr double kPanelWidth = 640;
 constexpr double kTallerHeights[] = {640, 1024};
 constexpr int kDrops = 2000;
-constexpr double kLeastShare = 0.01; // of the drops, for every slot
+constexpr double kLeastShare = 0.01; // of the drops, for every button
 constexpr double kDropSeconds = 8;   // every drop has to be down in a slot by then
 constexpr uint32_t kSeed = 1;        // for the pictures
 
@@ -62,8 +62,8 @@ Drop drop(double height, uint32_t seed, bool practice)
 	return result;
 }
 
-// The one slot a drop came down in, or -1.
-int slot(const Drop &drop)
+// The one button a drop pressed, as its index in the button table, or -1.
+int button(const Drop &drop)
 {
 	return drop.seconds >= 0 && drop.pressed.size() == 1 ? static_cast<int>(index(drop.pressed[0])) : -1;
 }
@@ -71,18 +71,18 @@ int slot(const Drop &drop)
 bool drops()
 {
 	const double lowest = PlinkoBoard().minHeight();
-	std::vector<int> landedIn(kDrops);
-	std::array<int, kControlCount> perSlot{};
+	std::vector<int> pressed(kDrops);
+	std::array<int, kControlCount> perButton{};
 	int landed = 0, practiceCalls = 0, realCalls = 0, realPresses = 0;
 	double slowest = 0;
 	for (int i = 0; i < kDrops; i++) {
 		const auto seed = static_cast<uint32_t>(i + 1);
 		const Drop practice = drop(lowest, seed, true);
 		practiceCalls += practice.calls;
-		landedIn[i] = slot(practice);
-		if (landedIn[i] >= 0) {
+		pressed[i] = button(practice);
+		if (pressed[i] >= 0) {
 			landed++;
-			perSlot[static_cast<size_t>(landedIn[i])]++;
+			perButton[static_cast<size_t>(pressed[i])]++;
 			slowest = std::max(slowest, practice.seconds);
 		}
 		// The same drop in real mode, where the press has to reach the host. Exit asks nothing of it.
@@ -91,19 +91,27 @@ bool drops()
 		realPresses += real.pressed.size() == 1 && real.pressed[0] != Control::Exit;
 	}
 
+	// The buttons' shares, from left to right on the board.
+	std::array<Control, kControlCount> board{};
+	for (size_t i = 0; i < kControlCount; i++)
+		board[i] = static_cast<Control>(i);
+	PlinkoBoard plinko;
+	ControlPanel panel(plinko);
+	std::sort(board.begin(), board.end(),
+		  [&](Control a, Control b) { return plinko.home(panel, a).x < plinko.home(panel, b).x; });
 	std::string shares;
 	bool spread = true;
-	for (size_t i = 0; i < kControlCount; i++) {
-		const double share = static_cast<double>(perSlot[i]) / kDrops;
+	for (const Control control : board) {
+		const double share = static_cast<double>(perButton[index(control)]) / kDrops;
 		spread = spread && share >= kLeastShare;
 		char part[96];
-		std::snprintf(part, sizeof(part), "%s%s %.1f%%", i ? ", " : "",
-			      test::names({static_cast<Control>(i)}).c_str(), share * 100);
+		std::snprintf(part, sizeof(part), "%s%s %.1f%%", shares.empty() ? "" : ", ", test::names({control}).c_str(),
+			      share * 100);
 		shares += part;
 	}
 	const bool lowestOk = landed == kDrops && spread;
 	test::report(lowestOk,
-		     "%.0f x %.0f panel, %d drops from the top -> %d came down in one slot each (the slowest after %.1f seconds): %s: %s",
+		     "%.0f x %.0f panel, %d drops from the top -> %d pressed one button each (the slowest after %.1f seconds), left to right: %s: %s",
 		     kPanelWidth, lowest, kDrops, landed, slowest, shares.c_str(), lowestOk ? "OK" : "DIFFERENT");
 	int passed = lowestOk;
 
@@ -113,7 +121,7 @@ bool drops()
 		for (int i = 0; i < kDrops; i++) {
 			const Drop tall = drop(height, static_cast<uint32_t>(i + 1), true);
 			practiceCalls += tall.calls;
-			if (landedIn[i] >= 0 && slot(tall) == landedIn[i]) {
+			if (pressed[i] >= 0 && button(tall) == pressed[i]) {
 				same++;
 				tallSlowest = std::max(tallSlowest, tall.seconds);
 			}
@@ -121,7 +129,7 @@ bool drops()
 		const bool ok = same == kDrops;
 		passed += ok;
 		test::report(ok,
-			     "%.0f x %.0f panel, the same %d drops -> %d came down in the same slot as on the %.0f x %.0f panel (the slowest after %.1f seconds): %s",
+			     "%.0f x %.0f panel, the same %d drops -> %d pressed the same button as on the %.0f x %.0f panel (the slowest after %.1f seconds): %s",
 			     kPanelWidth, height, kDrops, same, kPanelWidth, lowest, tallSlowest, ok ? "OK" : "DIFFERENT");
 	}
 

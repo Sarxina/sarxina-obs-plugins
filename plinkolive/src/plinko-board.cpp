@@ -4,6 +4,8 @@
 
 #include <QPainter>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace sarxina {
@@ -11,6 +13,10 @@ namespace sarxina {
 namespace {
 
 constexpr double kSlotWidth = kWidth / kControlCount;
+// The buttons from left to right. The head comes down in the middle two slots most often.
+constexpr std::array<Control, kControlCount> kSlots = {
+	Control::VirtualCam, Control::Studio, Control::Stream, Control::Record, Control::Settings, Control::Exit,
+};
 constexpr double kSlotInset = 4.0;        // between a button and the sides and the floor of its slot
 constexpr Point kStart{kWidth / 2, 48.0}; // where the head hangs before a drop, over the top peg
 constexpr double kTopRowY = 76.0;
@@ -70,7 +76,8 @@ double PlinkoBoard::slotY() const
 
 Point PlinkoBoard::home(const ControlPanel &, Control control) const
 {
-	return {kSlotWidth * (index(control) + 0.5), slotY()};
+	const auto slot = std::find(kSlots.begin(), kSlots.end(), control) - kSlots.begin();
+	return {kSlotWidth * (static_cast<double>(slot) + 0.5), slotY()};
 }
 
 double PlinkoBoard::buttonWidth() const

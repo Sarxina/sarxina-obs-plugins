@@ -1,7 +1,7 @@
 // PlinkoLive's game. The head hangs at the top of the panel over the point of a triangle of pegs: one peg, then two,
 // then three, and so on down to the slots along the bottom. A click drops it, always from the same place. It bounces
-// left or right off each row and comes down in one of the slots, one slot for each button in the order of OBS's own
-// Controls panel, and that button is pressed.
+// left or right off each row and comes down in one of the slots, one slot for each button, and that button is pressed.
+// Start Streaming and Start Recording have the two middle slots, where the head lands most often.
 #pragma once
 
 #include "game.hpp"
