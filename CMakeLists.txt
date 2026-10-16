@@ -15,6 +15,7 @@ add_subdirectory(shared)
 add_subdirectory(slinglive)
 add_subdirectory(plinkolive)
 add_subdirectory(sarxina-obs-plugin-manager)
+add_subdirectory(sarxina-parametric-eq)
 
 # The smallest plugin the Sarxina OBS Plugin Manager can run, for anyone making their own. Never released.
 add_subdirectory(examples/example-plugin)
