@@ -263,7 +263,8 @@ CurveEditor::CurveEditor(const Settings &settings, double sampleRate, std::funct
 	grid->addWidget(new QLabel(text("On")), 1, 0);
 	grid->addWidget(new QLabel(text("Frequency")), 2, 0);
 	grid->addWidget(new QLabel(text("Gain")), 3, 0);
-	grid->addWidget(new QLabel(text("Q")), 4, 0);
+	qLabel_ = new QLabel();
+	grid->addWidget(qLabel_, 4, 0);
 	for (int band = 0; band < BandCount; band++)
 		buildColumn(band, grid);
 	layout->addLayout(grid);
@@ -282,6 +283,30 @@ CurveEditor::CurveEditor(const Settings &settings, double sampleRate, std::funct
 		edited();
 	});
 	bottom->addWidget(gain_);
+	bottom->addSpacing(24);
+	bottom->addWidget(new QLabel(text("Constant")));
+	constant_ = new QComboBox();
+	constant_->addItem(text("ConstantQ"));
+	constant_->addItem(text("ConstantWidth"));
+	connect(constant_, &QComboBox::currentIndexChanged, this, [this](int index) {
+		if (showing_)
+			return;
+		// Switching keeps every curve where it is: a width w at f is a Q of f / w.
+		const bool width = index == 1;
+		for (int band = 0; band < BandCount; band++) {
+			if (kindOf(band) != Kind::Bell)
+				continue;
+			BandSettings &b = settings_.bands[band];
+			if (width)
+				b.width = std::clamp(b.hz / b.q, minWidth, maxWidth);
+			else
+				b.q = std::clamp(b.hz / b.width, minQ, maxQ);
+		}
+		settings_.constantWidth = width;
+		showNumbers();
+		edited();
+	});
+	bottom->addWidget(constant_);
 	bottom->addSpacing(24);
 	bottom->addWidget(new QLabel(text("Range")));
 	range_ = new QComboBox();
@@ -370,7 +395,10 @@ void CurveEditor::buildColumn(int band, QGridLayout *grid)
 		connect(c.q, &QDoubleSpinBox::valueChanged, this, [this, band](double v) {
 			if (showing_)
 				return;
-			settings_.bands[band].q = v;
+			if (settings_.constantWidth)
+				settings_.bands[band].width = v;
+			else
+				settings_.bands[band].q = v;
 			edited();
 		});
 	} else {
@@ -397,15 +425,28 @@ void CurveEditor::showNumbers()
 		c.hz->setValue(b.hz);
 		if (c.db)
 			c.db->setValue(b.db);
-		if (c.q)
-			c.q->setValue(b.q);
+		if (c.q) {
+			if (settings_.constantWidth) {
+				c.q->setRange(minWidth, maxWidth);
+				c.q->setDecimals(1);
+				c.q->setSingleStep(1);
+				c.q->setValue(b.width);
+			} else {
+				c.q->setRange(minQ, maxQ);
+				c.q->setDecimals(2);
+				c.q->setSingleStep(0.1);
+				c.q->setValue(b.q);
+			}
+		}
 		if (c.slope)
 			c.slope->setCurrentIndex(std::clamp(b.slope / 6 - 1, 0, 7));
 		if (c.order)
 			c.order->setCurrentIndex(b.steep ? 1 : 0);
 	}
 	gain_->setValue(settings_.gainDb);
+	constant_->setCurrentIndex(settings_.constantWidth ? 1 : 0);
 	range_->setCurrentIndex(settings_.wideRange ? 1 : 0);
+	qLabel_->setText(text(settings_.constantWidth ? "Width" : "Q"));
 	showing_ = false;
 }
 

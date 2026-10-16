@@ -11,7 +11,7 @@ SlingLive and PlinkoLive are docks that stand in for OBS's Controls panel. Every
 - `shared\src\controls-dock`, `panel-painter` and `obs-bridge` are the dock in OBS, how it looks, and the link to OBS.
 - `slinglive\src\slingshot` and `plinkolive\src\plinko-board` are the two games.
 
-Sarxina Parametric EQ, in `sarxina-parametric-eq\`, is an audio filter rather than a dock and uses none of the shared dock code: `eq-design` is the equalizer (Audition's band layout as biquad sections, and the processor that runs them), `eq-settings` its settings as OBS keeps them, `curve-editor` the window with the curve, and `plugin-main` the filter in OBS.
+Sarxina Parametric EQ, in `sarxina-parametric-eq\`, is an audio filter rather than a dock and uses none of the shared dock code: `eq-design` is the equalizer (Audition's band layout as biquad sections, and the processor that runs them), `eq-settings` its settings as OBS keeps them, `curve-editor` the window with the curve, and `plugin-main` the filter in OBS. Sarxina Noise Gate (`sarxina-noise-gate\`) and Sarxina Hard Limiter (`sarxina-hard-limiter\`) are audio filters built the same way: `gate` and `limiter` are the processors, the `-settings` files their settings as OBS keeps them, `plugin-main` the filter.
 
 The Sarxina OBS Plugin Manager is a plugin of its own, in `sarxina-obs-plugin-manager\`:
 
@@ -39,15 +39,15 @@ $ctest = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7
 & $cmake --preset windows-x64
 & $cmake --build --preset windows-x64
 & $ctest --test-dir build_x64 -C RelWithDebInfo -V
-& $cmake --build --preset windows-x64 --target slinglive-package plinkolive-package sarxina-obs-plugin-manager-package sarxina-parametric-eq-package
+& $cmake --build --preset windows-x64 --target slinglive-package plinkolive-package sarxina-obs-plugin-manager-package sarxina-parametric-eq-package sarxina-noise-gate-package sarxina-hard-limiter-package
 ```
 
 What each one does:
 
 1. **Configure.** The first time, this downloads the three archives listed in `buildspec.json` into `.deps\`, checks each against its SHA-256, and builds `libobs` and `obs-frontend-api`. That takes a few minutes. Later runs skip all of it.
-2. **Build.** Produces `<plugin>.dll` in `build_x64\<plugin>\RelWithDebInfo\` for `slinglive`, `plinkolive`, `sarxina-obs-plugin-manager` and `sarxina-parametric-eq`, and the example plugin in `build_x64\examples\example-plugin\RelWithDebInfo\`.
+2. **Build.** Produces `<plugin>.dll` in `build_x64\<plugin>\RelWithDebInfo\` for `slinglive`, `plinkolive`, `sarxina-obs-plugin-manager`, `sarxina-parametric-eq`, `sarxina-noise-gate` and `sarxina-hard-limiter`, and the example plugin in `build_x64\examples\example-plugin\RelWithDebInfo\`.
 3. **Check.** Runs each plugin's self-test, described below. It needs no OBS and no internet, and shows nothing on screen.
-4. **Package.** Produces `dist\<plugin>-<version>-windows-x64.zip` for each of the four, the files to attach to a release. `dist\` is not committed. The example plugin is never packaged.
+4. **Package.** Produces `dist\<plugin>-<version>-windows-x64.zip` for each of the six, the files to attach to a release. `dist\` is not committed. The example plugin is never packaged.
 
 Versions used: Build Tools for Visual Studio 2022 17.13.6 (MSVC 19.43), CMake 3.30.5, Windows SDK 10.0.22621.0, OBS Studio 32.2.2 sources, obs-deps 2026-07-15, Qt 6.11.1.
 
@@ -71,7 +71,10 @@ Each plugin has a check that needs no screen. Nothing in OBS is started or stopp
 
 - **Sarxina Parametric EQ** checks each kind of band against the textbook (a band's gain at its centre and half of it at its edges, a shelf's half gain at its corner, a pass filter's -3 dB at its cutoff and its fall an octave out, for every slope), runs an impulse through the filter as OBS would and measures it against the drawn curve at 400 frequencies, and takes the settings through OBS's settings data and back. With a folder it also paints the editor and writes `response.csv`.
 
-Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1`, `PLINKOLIVE_SELFTEST=1`, `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1` or `SARXINA_PARAMETRIC_EQ_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (and likewise for the others) for the pictures. Inside OBS the manager's self-test also lists the plugins that registered through OBS and, once VTube Studio is connected, asks it which model is loaded, the way a plugin would. With `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE=<a profile's basic.ini>` it also says which Twitch account that profile is connected to, by name only.
+- **Sarxina Noise Gate** checks that a word out of silence comes out whole from its first sample, that the noise floor comes out exactly the range down, the hysteresis between the open and close thresholds, and the hold, release and attack times, sample by sample.
+- **Sarxina Hard Limiter** puts 3 s of bursts up to 20 dB over the ceiling through it at several look-aheads, linked and not, and checks that no sample goes over it and that the look-ahead alone keeps it there; then that audio under the ceiling comes out unchanged, the input boost, the gain on a single peak, that it starts down one look-ahead early, the 12 dB per release time recovery, and linked channels.
+
+Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1`, `PLINKOLIVE_SELFTEST=1`, `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1`, `SARXINA_PARAMETRIC_EQ_SELFTEST=1`, `SARXINA_NOISE_GATE_SELFTEST=1` or `SARXINA_HARD_LIMITER_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (and likewise for the others) for the pictures. Inside OBS the manager's self-test also lists the plugins that registered through OBS and, once VTube Studio is connected, asks it which model is loaded, the way a plugin would. With `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE=<a profile's basic.ini>` it also says which Twitch account that profile is connected to, by name only.
 
 A passing run looks like this:
 

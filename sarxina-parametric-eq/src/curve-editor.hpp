@@ -69,7 +69,7 @@ private:
 		QCheckBox *on = nullptr;
 		QDoubleSpinBox *hz = nullptr;
 		QDoubleSpinBox *db = nullptr;  // bells and shelves
-		QDoubleSpinBox *q = nullptr;   // bells
+		QDoubleSpinBox *q = nullptr;   // bells: Q, or width in Constant Width
 		QComboBox *slope = nullptr;    // pass filters
 		QComboBox *order = nullptr;    // shelves
 	};
@@ -83,7 +83,9 @@ private:
 	CurveGraph *graph_ = nullptr;
 	std::array<Column, BandCount> columns_;
 	QDoubleSpinBox *gain_ = nullptr;
+	QComboBox *constant_ = nullptr;
 	QComboBox *range_ = nullptr;
+	QLabel *qLabel_ = nullptr;
 	bool showing_ = false;
 };
 

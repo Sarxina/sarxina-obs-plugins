@@ -98,10 +98,17 @@ Settings Settings::defaults()
 		b.hz = hz[band];
 		b.on = band != HighPass && band != LowPass;
 		b.q = 2;
+		b.width = hz[band] / 2;
 		b.slope = 24;
 		b.steep = false;
 	}
 	return s;
+}
+
+double Settings::qOf(int band) const
+{
+	const BandSettings &b = bands[band];
+	return std::clamp(constantWidth ? b.hz / std::max(b.width, minWidth) : b.q, minQ, maxQ);
 }
 
 std::complex<double> Biquad::at(double hz, double sampleRate) const
@@ -110,7 +117,7 @@ std::complex<double> Biquad::at(double hz, double sampleRate) const
 	return (b0 + b1 * z1 + b2 * z2) / (1.0 + a1 * z1 + a2 * z2);
 }
 
-std::vector<Biquad> sectionsOf(int band, const BandSettings &b, double sampleRate)
+std::vector<Biquad> sectionsOf(int band, const BandSettings &b, double q, double sampleRate)
 {
 	std::vector<Biquad> out;
 	if (!b.on)
@@ -127,7 +134,7 @@ std::vector<Biquad> sectionsOf(int band, const BandSettings &b, double sampleRat
 		break;
 	case Kind::Bell:
 		if (b.db != 0)
-			out.push_back(bell(b.hz, b.db, std::clamp(b.q, minQ, maxQ), sampleRate));
+			out.push_back(bell(b.hz, b.db, q, sampleRate));
 		break;
 	}
 	return out;
@@ -137,7 +144,7 @@ Design Design::of(const Settings &settings, double sampleRate)
 {
 	Design d;
 	for (int band = 0; band < BandCount; band++) {
-		const std::vector<Biquad> sections = sectionsOf(band, settings.bands[band], sampleRate);
+		const std::vector<Biquad> sections = sectionsOf(band, settings.bands[band], settings.qOf(band), sampleRate);
 		d.sections.insert(d.sections.end(), sections.begin(), sections.end());
 	}
 	d.gain = std::pow(10, settings.gainDb / 20);

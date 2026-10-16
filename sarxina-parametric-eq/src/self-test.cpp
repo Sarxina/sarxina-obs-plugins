@@ -70,27 +70,30 @@ double dbOf(const Settings &s, double hz)
 	return Design::of(s, rate).db(hz, rate);
 }
 
-// Alec's stream voice EQ (Audition session SarxinaFinalRealStreamVoice, slot 1), as parse_rack.py reads it.
+// Alec's stream voice EQ (Audition session SarxinaFinalRealStreamVoice, slot 1), as parse_rack.py reads it and as
+// Audition's own window showed it on 2026-10-16: Constant Width, gains +2.1, -2.7, -2.8, -2.7 and +10.6 dB.
 Settings streamVoice()
 {
 	Settings s = Settings::defaults();
-	auto set = [&s](int band, bool on, double hz, double db, double q) {
+	s.constantWidth = true;
+	auto set = [&s](int band, bool on, double hz, double db, double q, double width) {
 		s.bands[band].on = on;
 		s.bands[band].hz = hz;
 		s.bands[band].db = db;
 		s.bands[band].q = q;
+		s.bands[band].width = width;
 	};
-	set(HighPass, true, 79.55, 0, 2);
+	set(HighPass, true, 79.55, 0, 2, 40);
 	s.bands[HighPass].slope = 48;
-	set(LowShelf, true, 40, 0, 2);
-	set(Bell1, true, 130.84, 1.283, 2.0);
-	set(Bell2, true, 246.75, -1.678, 1.5);
-	set(Bell3, true, 2230.57, -1.776, 10.8);
-	set(Bell4, true, 4312.46, -1.678, 9.3);
-	set(Bell5, true, 12800, 0, 2.0);
-	set(HighShelf, true, 13884.18, 6.612, 2);
+	set(LowShelf, true, 40, 0, 2, 20);
+	set(Bell1, true, 130.84, 2.053, 2.0, 65.42);
+	set(Bell2, true, 246.75, -2.684, 1.5, 164.5);
+	set(Bell3, true, 2230.57, -2.842, 10.8, 206.53);
+	set(Bell4, true, 4312.46, -2.684, 9.3, 463.71);
+	set(Bell5, true, 12800, 0, 2.0, 6400);
+	set(HighShelf, true, 13884.18, 10.579, 2, 6942);
 	s.bands[HighShelf].steep = true;
-	set(LowPass, false, 18000, 0, 2);
+	set(LowPass, false, 18000.01, 0, 2, 9000);
 	return s;
 }
 
@@ -136,6 +139,17 @@ bool textbook()
 		t.expect(dbOf(s, 2000), -3.0103, 0.005, std::to_string(slope) + " dB/oct low-pass cutoff");
 		t.expect(dbOf(s, 4000), butterworth(warped(4000) / warped(2000)), 0.01,
 			 std::to_string(slope) + " dB/oct low-pass octave");
+	}
+	// Constant Width: a width w at f is the bell of Q f / w, and moving f keeps w (so the Q follows).
+	{
+		Settings q = flat(), w = flat();
+		q.bands[Bell2] = {true, 1500, -6, 1500 / 300.0};
+		w.constantWidth = true;
+		w.bands[Bell2] = {true, 1500, -6, 9.9, 12, true, 300};
+		for (double hz : {300.0, 1200.0, 1500.0, 1800.0, 5000.0})
+			t.expect(dbOf(w, hz), dbOf(q, hz), 1e-9, "width 300 Hz against Q 5 at " + std::to_string(int(hz)) + " Hz");
+		w.bands[Bell2].hz = 3000;
+		t.expect(w.qOf(Bell2), 10, 1e-9, "Q of a 300 Hz width moved to 3 kHz");
 	}
 	// The master gain moves everything.
 	Settings s = flat();
@@ -233,6 +247,9 @@ bool roundTrip()
 			t.expect(a.steep == b.steep ? 0 : 1, 0, 0, name + " order");
 	}
 	t.expect(back.gainDb, s.gainDb, 1e-9, "master gain");
+	t.expect(back.constantWidth ? 1 : 0, s.constantWidth ? 1 : 0, 0, "constant width");
+	for (int band = Bell1; band <= Bell5; band++)
+		t.expect(back.bands[band].width, s.bands[band].width, 1e-9, std::string(bandKey(band)) + " width");
 	t.expect(back.wideRange ? 1 : 0, 1, 0, "range");
 	return t.report("settings through OBS's settings data and back");
 }

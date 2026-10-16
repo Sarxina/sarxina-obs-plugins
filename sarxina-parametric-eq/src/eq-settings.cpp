@@ -40,10 +40,12 @@ void setDefaults(obs_data_t *data)
 		case Kind::Bell:
 			obs_data_set_default_double(data, key(band, "db").c_str(), b.db);
 			obs_data_set_default_double(data, key(band, "q").c_str(), b.q);
+			obs_data_set_default_double(data, key(band, "width").c_str(), b.width);
 			break;
 		}
 	}
 	obs_data_set_default_double(data, "gain_db", s.gainDb);
+	obs_data_set_default_bool(data, "constant_width", s.constantWidth);
 	obs_data_set_default_bool(data, "wide_range", s.wideRange);
 }
 
@@ -68,10 +70,12 @@ Settings read(obs_data_t *data)
 		case Kind::Bell:
 			b.db = std::clamp(obs_data_get_double(data, key(band, "db").c_str()), -maxDb, maxDb);
 			b.q = std::clamp(obs_data_get_double(data, key(band, "q").c_str()), minQ, maxQ);
+			b.width = std::clamp(obs_data_get_double(data, key(band, "width").c_str()), minWidth, maxWidth);
 			break;
 		}
 	}
 	s.gainDb = std::clamp(obs_data_get_double(data, "gain_db"), -maxDb, maxDb);
+	s.constantWidth = obs_data_get_bool(data, "constant_width");
 	s.wideRange = obs_data_get_bool(data, "wide_range");
 	return s;
 }
@@ -95,10 +99,12 @@ void write(obs_data_t *data, const Settings &s)
 		case Kind::Bell:
 			obs_data_set_double(data, key(band, "db").c_str(), b.db);
 			obs_data_set_double(data, key(band, "q").c_str(), b.q);
+			obs_data_set_double(data, key(band, "width").c_str(), b.width);
 			break;
 		}
 	}
 	obs_data_set_double(data, "gain_db", s.gainDb);
+	obs_data_set_bool(data, "constant_width", s.constantWidth);
 	obs_data_set_bool(data, "wide_range", s.wideRange);
 }
 
