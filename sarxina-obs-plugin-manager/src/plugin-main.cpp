@@ -47,9 +47,21 @@ void vtsRequest(void *, calldata_t *call)
 		manager->vtsRequest(*request);
 }
 
+// Chat is the chat of the Twitch account this OBS profile is connected to.
+void followProfile()
+{
+	const QString account = sarxina::twitchAccount(obs_frontend_get_profile_config());
+	if (account.isEmpty())
+		blog(LOG_INFO, "[%s] this OBS profile is not connected to a Twitch account", PLUGIN_TITLE);
+	manager->followTwitchAccount(account);
+}
+
 void frontendEvent(enum obs_frontend_event event, void *)
 {
-	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+	if (event == OBS_FRONTEND_EVENT_PROFILE_CHANGED) {
+		followProfile();
+	} else if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+		followProfile();
 		manager->start();
 		if (qEnvironmentVariableIntValue("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST") != 0) {
 			runSelfTest(qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES").constData());

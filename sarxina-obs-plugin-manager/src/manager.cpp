@@ -84,21 +84,24 @@ void Manager::settingsChanged(const char *id)
 
 // ---- chat -----------------------------------------------------------------------------------------------------------
 
-void Manager::joinTwitch(const QString &channel)
+void Manager::followTwitchAccount(const QString &account)
 {
-	if (!TwitchChat::validChannel(channel))
+	if (closed_)
 		return;
-	channel_ = channel.toLower();
-	chatOn_ = true;
-	save();
-	twitch_.join(channel_);
+	if (!TwitchChat::validChannel(account))
+		twitch_.leave();
+	else if (twitch_.state() == TwitchChat::State::Off || twitch_.channel() != account.toLower())
+		twitch_.join(account);
 }
 
-void Manager::leaveTwitch()
+QString twitchAccount(config_t *profile)
 {
-	chatOn_ = false;
-	save();
-	twitch_.leave();
+	if (!profile)
+		return {};
+	const char *type = config_get_string(profile, "Auth", "Type");
+	const char *name = config_get_string(profile, "Twitch", "Name");
+	const QString account = QString::fromUtf8(name ? name : "");
+	return type && std::strcmp(type, "Twitch") == 0 && TwitchChat::validChannel(account) ? account : QString();
 }
 
 void Manager::route(const ChatMessage &message)
@@ -154,8 +157,6 @@ void Manager::vtsRequest(const sarxina_vts_request &request)
 
 void Manager::start()
 {
-	if (chatOn_ && TwitchChat::validChannel(channel_))
-		twitch_.join(channel_);
 	if (vtsOn_ && !vtsToken_.isEmpty()) // never asks VTube Studio for a new token on its own
 		vts_.connectTo(vtsPort_, vtsToken_, false);
 }
@@ -179,8 +180,6 @@ void Manager::load()
 		return;
 	obs_data_set_default_int(config, "vts_port", 8001);
 
-	channel_ = QString::fromUtf8(obs_data_get_string(config, "twitch_channel"));
-	chatOn_ = obs_data_get_bool(config, "twitch_on");
 	vtsPort_ = static_cast<int>(obs_data_get_int(config, "vts_port"));
 	vtsOn_ = obs_data_get_bool(config, "vts_on");
 	vtsToken_ = QString::fromUtf8(obs_data_get_string(config, "vts_token"));
@@ -205,8 +204,6 @@ void Manager::save() const
 		obs_data_set_bool(plugins, id.c_str(), enabled);
 	OBSDataAutoRelease config = obs_data_create();
 	obs_data_set_obj(config, "plugins", plugins);
-	obs_data_set_string(config, "twitch_channel", channel_.toUtf8().constData());
-	obs_data_set_bool(config, "twitch_on", chatOn_);
 	obs_data_set_int(config, "vts_port", vtsPort_);
 	obs_data_set_bool(config, "vts_on", vtsOn_);
 	obs_data_set_string(config, "vts_token", vtsToken_.toUtf8().constData());

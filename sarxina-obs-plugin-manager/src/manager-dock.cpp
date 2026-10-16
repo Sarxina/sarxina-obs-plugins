@@ -4,15 +4,16 @@
 
 #include <obs-module.h>
 
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
+#include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -59,17 +60,10 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	auto *grid = new QGridLayout(connections);
 	grid->setColumnStretch(1, 1);
 
-	channel_ = new QLineEdit(manager.channel(), connections);
-	channel_->setPlaceholderText(text("Twitch.Channel"));
-	channel_->setMaxLength(26);
-	twitchButton_ = new QPushButton(connections);
+	// Twitch: no settings of its own, it follows the account OBS is connected to.
 	twitchState_ = plain(QString(), connections);
-	QLabel *twitch = plain(text("Twitch"), connections);
-	twitch->setBuddy(channel_);
-	grid->addWidget(twitch, 0, 0);
-	grid->addWidget(channel_, 0, 1);
-	grid->addWidget(twitchButton_, 0, 2);
-	grid->addWidget(twitchState_, 1, 1, 1, 2);
+	grid->addWidget(plain(text("Twitch"), connections), 0, 0);
+	grid->addWidget(twitchState_, 0, 1, 1, 2);
 
 	port_ = new QSpinBox(connections);
 	port_->setRange(1, 65535);
@@ -78,21 +72,12 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	vtsState_ = plain(QString(), connections);
 	QLabel *vts = plain(text("VTubeStudio"), connections);
 	vts->setBuddy(port_);
-	grid->addWidget(vts, 2, 0);
-	grid->addWidget(port_, 2, 1);
-	grid->addWidget(vtsButton_, 2, 2);
-	grid->addWidget(vtsState_, 3, 1, 1, 2);
+	grid->addWidget(vts, 1, 0);
+	grid->addWidget(port_, 1, 1);
+	grid->addWidget(vtsButton_, 1, 2);
+	grid->addWidget(vtsState_, 2, 1, 1, 2);
 	layout->addWidget(connections);
 
-	connect(twitchButton_, &QPushButton::clicked, this, &ManagerDock::pressTwitch);
-	connect(channel_, &QLineEdit::returnPressed, this, [this] {
-		if (manager_.twitch().state() == TwitchChat::State::Off)
-			pressTwitch();
-	});
-	connect(channel_, &QLineEdit::textEdited, this, [this] {
-		badChannel_ = false;
-		showTwitch();
-	});
 	connect(&manager.twitch(), &TwitchChat::stateChanged, this, &ManagerDock::showTwitch);
 	connect(vtsButton_, &QPushButton::clicked, this, &ManagerDock::pressVts);
 	connect(&manager.vts(), &VTubeStudio::stateChanged, this, &ManagerDock::showVts);
@@ -114,33 +99,12 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 
 // ---- connections ----------------------------------------------------------------------------------------------------
 
-void ManagerDock::pressTwitch()
-{
-	if (manager_.twitch().state() != TwitchChat::State::Off) {
-		manager_.leaveTwitch();
-		return;
-	}
-	QString channel = channel_->text().trimmed();
-	if (channel.startsWith('#'))
-		channel.remove(0, 1);
-	badChannel_ = !TwitchChat::validChannel(channel);
-	if (badChannel_)
-		showTwitch();
-	else
-		manager_.joinTwitch(channel);
-}
-
 void ManagerDock::showTwitch()
 {
-	const TwitchChat::State state = manager_.twitch().state();
 	const QString channel = manager_.twitch().channel();
-	twitchButton_->setText(text(state == TwitchChat::State::Off ? "Connect" : "Disconnect"));
-	channel_->setReadOnly(state != TwitchChat::State::Off);
-	if (state != TwitchChat::State::Off)
-		channel_->setText(channel);
-	switch (state) {
-	case TwitchChat::State::Off:
-		twitchState_->setText(text(badChannel_ ? "Twitch.BadChannel" : "Off"));
+	switch (manager_.twitch().state()) {
+	case TwitchChat::State::Off: // the OBS profile has no Twitch account
+		twitchState_->setText(text("Twitch.NoAccount"));
 		break;
 	case TwitchChat::State::Connecting:
 		twitchState_->setText(text("Twitch.Connecting").arg(channel));
@@ -183,20 +147,31 @@ void ManagerDock::showVts()
 
 // ---- plugins --------------------------------------------------------------------------------------------------------
 
-// A plugin's row: its name with the gear and the Add or Remove button, and what it does underneath.
+// A plugin's row, one line however many there are: its name, the gear once it is added, and Add or Remove. What it
+// does folds out under the name.
 void ManagerDock::addRow(Plugin *plugin)
 {
 	noPlugins_->hide();
 	QWidget *list = plugins_->parentWidget();
 	auto *row = new QWidget(list);
 	auto *grid = new QGridLayout(row);
-	grid->setContentsMargins(0, 0, 0, 6);
+	grid->setContentsMargins(0, 0, 0, 0);
 	grid->setColumnStretch(0, 1);
 
-	QLabel *title = plain(name(plugin), row);
+	// The name opens and closes the description, with OBS's own arrow (the one that folds groups in Sources).
+	// Checked means folded, as in OBS.
+	auto *title = new QCheckBox(name(plugin), row);
+	title->setProperty("class", "indicator-expand");
+	title->setChecked(true);
 	QFont bold = title->font();
 	bold.setBold(true);
 	title->setFont(bold);
+	QLabel *about = plain(QString::fromUtf8(plugin->info->description ? plugin->info->description : ""), row);
+	about->setContentsMargins(style()->pixelMetric(QStyle::PM_IndicatorWidth, nullptr, title) +
+					  style()->pixelMetric(QStyle::PM_CheckBoxLabelSpacing, nullptr, title),
+				  0, 0, 0);
+	about->hide();
+	connect(title, &QCheckBox::toggled, about, [about](bool folded) { about->setVisible(!folded); });
 
 	auto *gear = new QToolButton(row);
 	gear->setProperty("class", "icon-gear"); // OBS's own gear, from its theme
@@ -211,8 +186,7 @@ void ManagerDock::addRow(Plugin *plugin)
 	grid->addWidget(title, 0, 0);
 	grid->addWidget(gear, 0, 1);
 	grid->addWidget(add, 0, 2);
-	grid->addWidget(plain(QString::fromUtf8(plugin->info->description ? plugin->info->description : ""), row), 1, 0,
-			1, 3);
+	grid->addWidget(about, 1, 0, 1, 3);
 	plugins_->addWidget(row);
 
 	rows_[plugin] = {gear, add};

@@ -15,7 +15,7 @@ The Sarxina OBS Plugin Manager is a plugin of its own, in `sarxina-obs-plugin-ma
 
 - `shared\src\sarxina-obs-plugin-manager.h` is all that the manager and a plugin share. Plugins build against it and reach the manager through OBS's global procedure handler, so neither links the other, and a plugin runs on its own when the manager is not installed.
 - `manager` keeps the plugins that registered and whether each is added; `manager-dock` is the dock, and `properties-form` draws the settings behind a plugin's gear from what the plugin says about them.
-- `chat-router` is the one way chat reaches plugins; the checks every message passes are listed at the top of `chat-router.hpp`. `twitch-chat` reads Twitch chat without logging in, `vtube-studio` is the one VTube Studio connection plugins share, and `websocket` carries both.
+- `chat-router` is the one way chat reaches plugins; the checks every message passes are listed at the top of `chat-router.hpp`. `twitch-chat` reads, without logging in, the chat of the Twitch account OBS is connected to (Settings > Stream > Connect Account; the manager reads only the account's name from the OBS profile, never its tokens). `vtube-studio` is the one VTube Studio connection plugins share, and `websocket` carries both.
 - `examples\example-plugin` is the smallest plugin the manager can run (see the last section).
 
 ## What you need
@@ -65,9 +65,9 @@ Each plugin has a check that needs no screen. Nothing in OBS is started or stopp
 
 - **SlingLive** plays three scripted flings in practice mode, each with the bobbing buttons at 57 different points, and reports which buttons each one pressed.
 - **PlinkoLive** drops the head from the top 2000 times, each with the random nudges at the pegs seeded differently, and reports what share of the drops pressed each button (every button has to get at least 1 in 100), that the same drops press the same buttons on two taller panels, and that practice mode never reached OBS.
-- **Sarxina OBS Plugin Manager** reads lines of Twitch's chat protocol, puts messages that should be dropped through the checks, and routes commands from different chatters and roles at different times to a plugin that exists only in the test. Then it goes the whole way over real websockets to stand-ins for Twitch and VTube Studio on the same computer: logging in to chat anonymously, a command reaching the plugin, reconnecting; and with VTube Studio, asking for permission once, logging in with the remembered token, never asking again on its own, and a plugin's request with its answer.
+- **Sarxina OBS Plugin Manager** reads lines of Twitch's chat protocol and the Twitch account from OBS profiles, puts messages that should be dropped through the checks, and routes commands from different chatters and roles at different times to a plugin that exists only in the test. Then it goes the whole way over real websockets to stand-ins for Twitch and VTube Studio on the same computer: logging in to chat anonymously, a command reaching the plugin, reconnecting; and with VTube Studio, asking for permission once, logging in with the remembered token, never asking again on its own, and a plugin's request with its answer.
 
-Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1`, `PLINKOLIVE_SELFTEST=1` or `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (and likewise for the others) for the pictures. Inside OBS the manager's self-test also lists the plugins that registered through OBS and, once VTube Studio is connected, asks it which model is loaded, the way a plugin would.
+Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1`, `PLINKOLIVE_SELFTEST=1` or `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (and likewise for the others) for the pictures. Inside OBS the manager's self-test also lists the plugins that registered through OBS and, once VTube Studio is connected, asks it which model is loaded, the way a plugin would. With `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE=<a profile's basic.ini>` it also says which Twitch account that profile is connected to, by name only.
 
 A passing run looks like this:
 
@@ -83,6 +83,7 @@ A passing run looks like this:
 [PlinkoLive] self-test: practice mode -> 0 calls to OBS (real mode, with a stand-in for OBS: 1944 calls for 1944 presses): OK
 [PlinkoLive] self-test: passed (3 of 3 panels as expected, practice mode as expected)
 [Sarxina OBS Plugin Manager] self-test: Twitch: 17 of 17 lines read as expected: OK
+[Sarxina OBS Plugin Manager] self-test: Twitch account: 5 of 5 profiles read as expected: OK
 [Sarxina OBS Plugin Manager] self-test: checks: 16 of 16 messages handled as expected: OK
 [Sarxina OBS Plugin Manager] self-test: routing: 28 of 28 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: Twitch connection: 12 of 12 steps as expected: OK

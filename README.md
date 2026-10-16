@@ -12,7 +12,7 @@ The only OBS plugin that makes you drop your head down a Plinko board to Record 
 
 ## Sarxina OBS Plugin Manager
 
-One dock for all of them: add the Sarxina plugins you want to OBS, change each one's settings behind its gear, and let them share one Twitch chat and one VTube Studio connection. Every plugin also works without it.
+One dock for all of them: add the Sarxina plugins you want to OBS, change each one's settings behind its gear, and let them share one VTube Studio connection and the chat of the Twitch account OBS is connected to (Settings > Stream > Connect Account). Every plugin also works without it.
 
 ## Install
 

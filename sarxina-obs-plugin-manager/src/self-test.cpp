@@ -1,7 +1,8 @@
 // The Sarxina OBS Plugin Manager's self-test (see shared/src/self-test.hpp). It needs no OBS and no internet: Twitch
 // and VTube Studio are played by small stand-in websocket servers on this computer.
 //
-//   1. Lines from Twitch become the right chat messages.
+//   1. Lines from Twitch become the right chat messages, and the Twitch account OBS is connected to is read from its
+//      profile (only the name).
 //   2. The checks drop what they should and let the rest through.
 //   3. Commands reach the plugin that registered them, and only when they may.
 //   4. The whole way: a stand-in Twitch sends chat over a real websocket, and a plugin's handler gets the command.
@@ -18,6 +19,7 @@
 #include "properties-form.hpp"
 
 #include <QCoreApplication>
+#include <QCheckBox>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
@@ -363,6 +365,46 @@ bool parsing()
 	return tally.report("Twitch", "lines read as expected");
 }
 
+// ---- 1b. the Twitch account OBS is connected to ---------------------------------------------------------------------
+
+// What a profile's basic.ini looks like with a connected Twitch account. The tokens beside the name are never read.
+const char *const kConnectedProfile = "[General]\nName=Streaming\n"
+				      "[Auth]\nType=Twitch\n"
+				      "[Twitch]\nName=sarxina\nUUID=x\nToken=not-for-us\nRefreshToken=not-for-us\n";
+
+QString accountIn(const char *profile)
+{
+	config_t *config = nullptr;
+	if (config_open_string(&config, profile) != CONFIG_SUCCESS)
+		return QStringLiteral("(unreadable)");
+	const QString account = twitchAccount(config);
+	config_close(config);
+	return account;
+}
+
+bool account()
+{
+	Tally tally;
+	tally.expect(accountIn(kConnectedProfile) == "sarxina", "the name of the connected account");
+	tally.expect(accountIn("[Auth]\nType=YouTube - RTMPS\n[Twitch]\nName=sarxina\n").isEmpty(),
+		     "nothing when OBS is connected to another service");
+	tally.expect(accountIn("[Twitch]\nName=sarxina\n").isEmpty(), "nothing when the account was disconnected");
+	tally.expect(accountIn("[Auth]\nType=Twitch\n[Twitch]\nName=two words\n").isEmpty(), "nothing for a bad name");
+	tally.expect(accountIn("[General]\nName=Untitled\n").isEmpty() && twitchAccount(nullptr).isEmpty(),
+		     "nothing in a profile without one");
+
+	// Given a copy of a real profile, says which account it has: only the name.
+	const QByteArray copy = qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE");
+	config_t *config = nullptr;
+	if (!copy.isEmpty() && config_open(&config, copy.constData(), CONFIG_OPEN_EXISTING) == CONFIG_SUCCESS) {
+		const QString name = twitchAccount(config);
+		config_close(config);
+		test::report(true, "Twitch account in %s: %s", copy.constData(),
+			     name.isEmpty() ? "none" : name.toUtf8().constData());
+	}
+	return tally.report("Twitch account", "profiles read as expected");
+}
+
 // ---- 2. the checks --------------------------------------------------------------------------------------------------
 
 bool checks()
@@ -497,7 +539,7 @@ bool twitchConnection()
 		return nick.mid(5);
 	};
 
-	manager.joinTwitch("Sarxina");
+	manager.followTwitchAccount("Sarxina");
 	const QByteArray nick = handshake("");
 	twitch.send(":" + nick + "!" + nick + "@" + nick + ".tmi.twitch.tv JOIN #sarxina");
 	tally.expect(waitFor([&] { return manager.twitch().state() == TwitchChat::State::Reading; }),
@@ -526,8 +568,8 @@ bool twitchConnection()
 	tally.expect(waitFor([&] { return twitch.connections == 3; }), "coming back by itself after a drop");
 	handshake(" after the drop");
 
-	manager.leaveTwitch();
-	tally.expect(manager.twitch().state() == TwitchChat::State::Off, "off after Disconnect");
+	manager.followTwitchAccount("");
+	tally.expect(manager.twitch().state() == TwitchChat::State::Off, "off when OBS has no Twitch account");
 	return tally.report("Twitch connection", "steps as expected");
 }
 
@@ -647,8 +689,9 @@ void picture(const char *folder)
 	dock.setAttribute(Qt::WA_DontShowOnScreen);
 	dock.resize(380, 520);
 	dock.show();
+	dock.findChildren<QCheckBox *>().at(1)->setChecked(false); // the second plugin's description, unfolded
 
-	manager.joinTwitch("sarxina");
+	manager.followTwitchAccount("sarxina");
 	QByteArray cap, nick, join;
 	twitch.next(cap), twitch.next(nick), twitch.next(join);
 	twitch.send(":" + nick.mid(5) + "!x@x JOIN #sarxina");
@@ -656,7 +699,7 @@ void picture(const char *folder)
 
 	const QString file = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock.png"));
 	test::report(dock.grab().save(file, "PNG"), "a picture of the dock in %s", file.toUtf8().constData());
-	manager.leaveTwitch();
+	manager.followTwitchAccount("");
 
 	// What the gear shows: the settings the plugin describes, drawn by the manager.
 	QWidget settings;
@@ -668,6 +711,24 @@ void picture(const char *folder)
 	waitFor([] { return false; }, 200);
 	const QString gear = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("settings.png"));
 	test::report(settings.grab().save(gear, "PNG"), "a picture of a plugin's settings in %s", gear.toUtf8().constData());
+
+	// A long list: twenty more plugins, one line each, in a dock that scrolls.
+	std::deque<std::string> names;
+	std::deque<Heard> heard(20);
+	std::deque<sarxina_plugin_info> more;
+	for (int i = 0; i < 20; i++) {
+		names.push_back("plugin-" + std::to_string(i + 3));
+		names.push_back("Plugin " + std::to_string(i + 3));
+		more.push_back(testPlugin(heard[i], names[names.size() - 2].c_str(), names.back().c_str()));
+		more.back().commands = nullptr;
+		more.back().command_count = 0;
+		manager.add(&more.back());
+	}
+	dock.resize(380, 720);
+	waitFor([] { return false; }, 200);
+	const QString many = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock-22-plugins.png"));
+	test::report(dock.grab().save(many, "PNG"), "a picture of the dock with 22 plugins in %s",
+		     many.toUtf8().constData());
 }
 
 } // namespace
@@ -675,6 +736,7 @@ void picture(const char *folder)
 bool runSelfTest(const char *picturesFolder)
 {
 	bool passed = parsing();
+	passed &= account();
 	passed &= checks();
 	passed &= routing();
 	passed &= twitchConnection();
