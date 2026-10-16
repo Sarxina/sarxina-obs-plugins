@@ -1,14 +1,21 @@
-# sarxina_add_obs_plugin(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>)
+# sarxina_add_obs_module(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>
+#                        [MODULE_SOURCES <files...>] [LOCALES <folders...>] [LIBRARIES <targets...>])
 #
-# Declares one OBS Studio plugin: the shared dock (shared/) with the plugin's own game in it. The plugin's sources
-# define makeGame() and runSelfTest(), and its folder has data/locale/*.ini with its own strings; the shared strings
-# in shared/data/locale are added to those. Each plugin gets:
+# Declares one OBS Studio plugin of this repository, from the folder that calls it. SOURCES go into the plugin and into
+# its self-test program, and define runSelfTest() (see shared/src/self-test.hpp); MODULE_SOURCES only into the
+# plugin, and define the OBS module. Its strings are data/locale/*.ini, with the same file from each LOCALES folder
+# added. Each plugin gets:
 #   <name>            the plugin itself (<name>.dll)
 #   <name>-selftest   its self-test as a program that needs no OBS, registered with CTest
 #   <name>-package    dist/<name>-<version>-windows-x64.zip, laid out so that extracting it into an OBS Studio
 #                     folder installs the plugin:
 #                       obs-plugins/64bit/<name>.dll
 #                       data/obs-plugins/<name>/...
+#
+# sarxina_add_obs_plugin(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>)
+#
+# One of the toys: the shared dock (shared/) with the plugin's own game in it. Its sources define makeGame() and
+# runSelfTest(), and the shared strings in shared/data/locale are added to its own.
 
 include_guard(GLOBAL)
 
@@ -29,22 +36,27 @@ function(sarxina_target_settings target)
   )
 endfunction()
 
-function(sarxina_add_obs_plugin name)
-  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES")
+function(sarxina_add_obs_module name)
+  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES;MODULE_SOURCES;LOCALES;LIBRARIES")
   if(NOT _plugin_TITLE OR NOT _plugin_VERSION OR NOT _plugin_SOURCES)
-    message(FATAL_ERROR "sarxina_add_obs_plugin(${name}) needs TITLE, VERSION and SOURCES")
+    message(FATAL_ERROR "sarxina_add_obs_module(${name}) needs TITLE, VERSION and SOURCES")
   endif()
 
   # The plugin's strings with the shared ones added
   set(_data "${CMAKE_CURRENT_BINARY_DIR}/data")
-  file(GLOB _locales RELATIVE "${SARXINA_SHARED_DIR}/data/locale" "${SARXINA_SHARED_DIR}/data/locale/*.ini")
+  file(GLOB _locales RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/data/locale" "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/*.ini")
   foreach(_locale IN LISTS _locales)
     set(_own "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/${_locale}")
-    set(_shared "${SARXINA_SHARED_DIR}/data/locale/${_locale}")
-    file(READ "${_own}" _own_text)
-    file(READ "${_shared}" _shared_text)
-    file(CONFIGURE OUTPUT "${_data}/locale/${_locale}" CONTENT "${_own_text}\n${_shared_text}" @ONLY)
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_own}" "${_shared}")
+    file(READ "${_own}" _text)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_own}")
+    foreach(_folder IN LISTS _plugin_LOCALES)
+      if(EXISTS "${_folder}/${_locale}")
+        file(READ "${_folder}/${_locale}" _shared_text)
+        string(APPEND _text "\n${_shared_text}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_folder}/${_locale}")
+      endif()
+    endforeach()
+    file(CONFIGURE OUTPUT "${_data}/locale/${_locale}" CONTENT "${_text}" @ONLY)
   endforeach()
 
   # Version details shown by Windows in the file's properties
@@ -57,11 +69,11 @@ function(sarxina_add_obs_plugin name)
   set(_definitions PLUGIN_NAME="${name}" PLUGIN_TITLE="${_plugin_TITLE}" PLUGIN_VERSION="${_plugin_VERSION}")
 
   add_library(
-    ${name} MODULE
-    ${_plugin_SOURCES} "${SARXINA_SHARED_DIR}/src/plugin-main.cpp" "${CMAKE_CURRENT_BINARY_DIR}/${name}-version.rc"
+    ${name} MODULE ${_plugin_SOURCES} ${_plugin_MODULE_SOURCES} "${CMAKE_CURRENT_BINARY_DIR}/${name}-version.rc"
   )
   sarxina_target_settings(${name})
-  target_link_libraries(${name} PRIVATE sarxina-shared)
+  target_include_directories(${name} PRIVATE "${SARXINA_SHARED_DIR}/src")
+  target_link_libraries(${name} PRIVATE ${_plugin_LIBRARIES})
   target_compile_definitions(${name} PRIVATE ${_definitions})
   set_target_properties(${name} PROPERTIES PREFIX "")
 
@@ -69,7 +81,8 @@ function(sarxina_add_obs_plugin name)
   #   ctest --test-dir build_x64 -C RelWithDebInfo -V
   add_executable(${name}-selftest ${_plugin_SOURCES} "${SARXINA_SHARED_DIR}/tests/selftest-main.cpp")
   sarxina_target_settings(${name}-selftest)
-  target_link_libraries(${name}-selftest PRIVATE sarxina-shared)
+  target_include_directories(${name}-selftest PRIVATE "${SARXINA_SHARED_DIR}/src")
+  target_link_libraries(${name}-selftest PRIVATE ${_plugin_LIBRARIES})
   target_compile_definitions(${name}-selftest PRIVATE ${_definitions})
   add_test(NAME ${name}-selftest COMMAND ${name}-selftest "${_data}/locale/en-US.ini" "${CMAKE_BINARY_DIR}/${name}-pictures")
   # The program needs the OBS and Qt libraries beside it; point it at the ones in .deps instead of copying them.
@@ -96,5 +109,19 @@ function(sarxina_add_obs_plugin name)
     DEPENDS ${name}
     COMMENT "Packaging ${name} ${_plugin_VERSION} into dist/"
     VERBATIM
+  )
+endfunction()
+
+function(sarxina_add_obs_plugin name)
+  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES")
+  sarxina_add_obs_module(
+    ${name}
+    TITLE "${_plugin_TITLE}"
+    VERSION "${_plugin_VERSION}"
+    DESCRIPTION "${_plugin_DESCRIPTION}"
+    SOURCES ${_plugin_SOURCES}
+    MODULE_SOURCES "${SARXINA_SHARED_DIR}/src/plugin-main.cpp"
+    LOCALES "${SARXINA_SHARED_DIR}/data/locale"
+    LIBRARIES sarxina-shared
   )
 endfunction()

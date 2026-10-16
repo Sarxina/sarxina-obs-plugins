@@ -6,18 +6,7 @@
 
 #include <QDir>
 
-#include <cstdarg>
-
 namespace sarxina::test {
-
-void report(bool ok, const char *format, ...)
-{
-	const QByteArray line = QByteArray("[") + obs_module_name() + "] self-test: " + format;
-	va_list args;
-	va_start(args, format);
-	blogva(ok ? LOG_INFO : LOG_WARNING, line.constData(), args);
-	va_end(args);
-}
 
 std::string names(const std::vector<Control> &controls)
 {
