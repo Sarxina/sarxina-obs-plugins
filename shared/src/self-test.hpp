@@ -9,8 +9,12 @@
 
 #include "controls.hpp"
 
+#include <obs-module.h>
+
+#include <QByteArray>
 #include <QString>
 
+#include <cstdarg>
 #include <string>
 #include <vector>
 
@@ -24,7 +28,14 @@ class ControlsDock;
 namespace test {
 
 // One line of results in the log: "[<plugin>] self-test: ...", a warning when `ok` is false.
-void report(bool ok, const char *format, ...);
+inline void report(bool ok, const char *format, ...)
+{
+	const QByteArray line = QByteArray("[") + obs_module_name() + "] self-test: " + format;
+	va_list args;
+	va_start(args, format);
+	blogva(ok ? LOG_INFO : LOG_WARNING, line.constData(), args);
+	va_end(args);
+}
 
 // The buttons' names as the panel shows them, for the log.
 std::string names(const std::vector<Control> &controls);

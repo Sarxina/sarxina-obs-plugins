@@ -33,7 +33,7 @@ ControlsDock::ControlsDock(std::unique_ptr<Game> game, Use use, QWidget *parent)
 		return;
 
 	elapsed_.start();
-	loadSettings();
+	panel_.setPractice(savedPractice());
 	panel_.setHost(&bridge_);
 	readObs();
 
@@ -89,33 +89,29 @@ void ControlsDock::setPractice(bool practice)
 		return;
 	panel_.setPractice(practice);
 	readObs();
-	saveSettings();
+	if (use_ == Use::Dock)
+		savePractice(practice);
 	update();
 }
 
-void ControlsDock::loadSettings()
+bool ControlsDock::savedPractice()
 {
-	bool practice = false; // real mode unless the settings say otherwise
 	BPtr<char> path(obs_module_config_path("config.json"));
-	if (path && os_file_exists(path)) {
-		OBSDataAutoRelease settings = obs_data_create_from_json_file_safe(path, "bak");
-		if (settings)
-			practice = std::strcmp(obs_data_get_string(settings, "mode"), "practice") == 0;
-	}
-	panel_.setPractice(practice);
+	if (!path || !os_file_exists(path))
+		return false; // real mode unless the settings say otherwise
+	OBSDataAutoRelease settings = obs_data_create_from_json_file_safe(path, "bak");
+	return settings && std::strcmp(obs_data_get_string(settings, "mode"), "practice") == 0;
 }
 
-void ControlsDock::saveSettings() const
+void ControlsDock::savePractice(bool practice)
 {
-	if (use_ != Use::Dock)
-		return;
 	BPtr<char> folder(obs_module_config_path(""));
 	BPtr<char> path(obs_module_config_path("config.json"));
 	if (!folder || !path)
 		return;
 	os_mkdirs(folder);
 	OBSDataAutoRelease settings = obs_data_create();
-	obs_data_set_string(settings, "mode", panel_.practice() ? "practice" : "real");
+	obs_data_set_string(settings, "mode", practice ? "practice" : "real");
 	obs_data_save_json_safe(settings, path, "tmp", "bak");
 }
 
@@ -134,10 +130,10 @@ void ControlsDock::openMenu()
 
 	const QPoint corner = mapToGlobal(QPoint(qRound(left_ + kWidth * scale_), qRound(27 * scale_)));
 	const QAction *picked = menu.exec(corner - QPoint(menu.sizeHint().width(), 0));
-	if (picked == real)
-		setPractice(false);
-	else if (picked == practice)
-		setPractice(true);
+	if (picked != real && picked != practice)
+		return;
+	setPractice(picked == practice);
+	emit modeChosen();
 }
 
 // ---- time -----------------------------------------------------------------------------------------------------------

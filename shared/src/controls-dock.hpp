@@ -1,6 +1,7 @@
 // The dock each plugin here puts in OBS in place of the Controls panel: the shared panel with the plugin's game on
 // it. It feeds them the mouse, the keys and the time, keeps the panel in step with OBS, and remembers practice or
-// real mode between sessions.
+// real mode between sessions (in the plugin's config.json, which savedPractice and savePractice also reach while
+// there is no dock).
 #pragma once
 
 #include "control-panel.hpp"
@@ -31,6 +32,12 @@ public:
 	QSize minimumSizeHint() const override { return {240, 160}; }
 
 	bool practice() const { return panel_.practice(); }
+	// Switches between practice and real mode, and remembers it.
+	void setPractice(bool practice);
+
+	// The mode remembered for the next dock.
+	static bool savedPractice();
+	static void savePractice(bool practice);
 
 	// For the self-test, which runs the dock with nothing on screen.
 	ControlPanel &panel() { return panel_; }
@@ -38,6 +45,10 @@ public:
 	void setPanelSize(int width, int height);
 	void advance(double seconds);
 	QImage snapshot(qreal pixelRatio);
+
+signals:
+	// Practice or real mode was picked in the dock's own gear menu.
+	void modeChosen();
 
 protected:
 	void paintEvent(QPaintEvent *event) override;
@@ -61,9 +72,6 @@ private:
 	Point toPanel(const QPointF &position) const;
 
 	void openMenu();
-	void setPractice(bool practice);
-	void loadSettings();
-	void saveSettings() const;
 
 	Use use_;
 	std::unique_ptr<Game> game_; // before panel_, which plays it
