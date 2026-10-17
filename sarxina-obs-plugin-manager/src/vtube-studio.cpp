@@ -33,7 +33,7 @@ const char *name(VTubeStudio::State state)
 
 } // namespace
 
-VTubeStudio::VTubeStudio(QObject *parent) : QObject(parent)
+VTubeStudio::VTubeStudio(QObject *parent) : QObject(parent), socket_(WebSocket::wholeJson)
 {
 	connect(&socket_, &WebSocket::opened, this, &VTubeStudio::opened);
 	connect(&socket_, &WebSocket::received, this, &VTubeStudio::received);

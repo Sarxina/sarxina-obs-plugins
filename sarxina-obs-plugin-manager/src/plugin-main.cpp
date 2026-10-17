@@ -21,12 +21,14 @@ MODULE_EXPORT const char *obs_module_description(void)
 	return obs_module_text("Description");
 }
 
-// The part of the self-test that needs OBS and the plugins in it (self-test.cpp).
+// The parts of the self-test that need OBS and the plugins in it (self-test.cpp).
 void checkInObs(sarxina::Manager &manager);
+void pressInObs(sarxina::ManagerDock &dock, sarxina::Manager &manager, const QString &press, const QString &pictures);
 
 namespace {
 
 sarxina::Manager *manager = nullptr;
+sarxina::ManagerDock *dock = nullptr; // while it is in OBS, which owns it
 
 void registerPlugin(void *, calldata_t *call)
 {
@@ -67,8 +69,12 @@ void frontendEvent(enum obs_frontend_event event, void *)
 			runSelfTest(qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES").constData());
 			checkInObs(*manager);
 		}
+		if (dock && qEnvironmentVariableIsSet("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS"))
+			pressInObs(*dock, *manager, qEnvironmentVariable("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS"),
+				   qEnvironmentVariable("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES"));
 	} else if (event == OBS_FRONTEND_EVENT_EXIT) {
 		obs_frontend_remove_event_callback(frontendEvent, nullptr);
+		dock = nullptr;
 		manager->shutDown();
 	}
 }
@@ -77,7 +83,8 @@ void frontendEvent(enum obs_frontend_event event, void *)
 
 bool obs_module_load(void)
 {
-	manager = new sarxina::Manager();
+	manager = new sarxina::Manager(sarxina::Manager::Use::Obs, sarxina::TwitchChat::kServer,
+				       sarxina::Store::Setup::forObs());
 	proc_handler_t *procs = obs_get_proc_handler();
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_register(in ptr plugin, out bool accepted)",
 			 registerPlugin, nullptr);
@@ -86,10 +93,11 @@ bool obs_module_load(void)
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_vts_request(in ptr request)", vtsRequest, nullptr);
 
 	if (obs_frontend_get_main_window()) {
-		auto *dock = new sarxina::ManagerDock(*manager);
+		dock = new sarxina::ManagerDock(*manager);
 		// OBS takes the widget and lists the dock in its Docks menu.
 		if (!obs_frontend_add_dock_by_id(PLUGIN_NAME, obs_module_text("DockTitle"), dock)) {
 			delete dock;
+			dock = nullptr;
 			blog(LOG_WARNING, "[%s] OBS did not accept the dock", PLUGIN_TITLE);
 		}
 		obs_frontend_add_event_callback(frontendEvent, nullptr);

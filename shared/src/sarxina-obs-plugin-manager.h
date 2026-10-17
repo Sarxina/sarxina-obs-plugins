@@ -7,7 +7,7 @@
  * manager is not installed, sarxina_obs_plugin_manager_register() returns false and the plugin switches itself on and
  * runs on its own, as if the manager did not exist.
  *
- * The manager owns what plugins share: whether each one is added to OBS, its settings (drawn from what the plugin
+ * The manager owns what plugins share: which ones are installed, their settings (drawn from what the plugin
  * says about them here, so the manager needs to know nothing about any plugin), one chat connection that hands plugins
  * the chat they asked for, and one connection to VTube Studio. BUILDING.md has the steps for a new plugin, and
  * examples/example-plugin is the smallest one.
@@ -65,6 +65,9 @@ struct sarxina_chat_message {
 	const struct sarxina_emote *emotes;
 	size_t emote_count;
 	int64_t time_ms; /* when the platform got it, in milliseconds since 1970 UTC */
+	/* The id of the channel point reward the message was sent with, or "". Only a reward that asks the viewer for
+	 * text comes through chat, as the text they typed; Twitch gives its id, not its name. */
+	const char *reward_id;
 };
 
 /* A chat command a plugin answers to, typed in chat as "!name" or "!name what follows". The manager matches it in any
@@ -87,8 +90,9 @@ struct sarxina_plugin_info {
 	const char *description; /* one sentence */
 	void *data;              /* handed back to every callback */
 
-	/* Off means the plugin acts as if it were not installed. Called once while the plugin registers: off until the
-	 * streamer adds it in the manager's dock. */
+	/* Off means the plugin acts as if it were not installed. Called with true while the plugin registers, with false
+	 * if the streamer uninstalls it while OBS runs (OBS no longer loads it once it restarts), and with true again if
+	 * they take that back before the restart. */
 	void (*set_enabled)(void *data, bool enabled);
 
 	/* Optional: the plugin's settings, described with OBS's own properties and kept by the plugin. The manager draws

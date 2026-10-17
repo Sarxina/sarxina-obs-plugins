@@ -12,10 +12,12 @@
 #                       obs-plugins/64bit/<name>.dll
 #                       data/obs-plugins/<name>/...
 #
-# sarxina_add_obs_plugin(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>)
+# sarxina_add_obs_plugin(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>
+#                        [LIBRARIES <targets...>])
 #
-# One of the toys: the shared dock (shared/) with the plugin's own game in it. Its sources define makeGame() and
-# runSelfTest(), and the shared strings in shared/data/locale are added to its own.
+# One of the docks: the shared dock (shared/) with the plugin's own game in it. Its sources define makeGame() and
+# runSelfTest(), and the shared strings in shared/data/locale are added to its own. LIBRARIES are more of the shared
+# code, such as sarxina-plinko.
 
 include_guard(GLOBAL)
 
@@ -76,6 +78,12 @@ function(sarxina_add_obs_module name)
   target_link_libraries(${name} PRIVATE ${_plugin_LIBRARIES})
   target_compile_definitions(${name} PRIVATE ${_definitions})
   set_target_properties(${name} PROPERTIES PREFIX "")
+  # What the list of plugins says about it (sarxina_add_plugins_index)
+  set_target_properties(
+    ${name}
+    PROPERTIES SARXINA_TITLE "${_plugin_TITLE}" SARXINA_VERSION "${_plugin_VERSION}"
+               SARXINA_STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/data/locale/en-US.ini"
+  )
 
   # The self-test the plugin can run inside OBS, as a program that needs no OBS and shows nothing on screen:
   #   ctest --test-dir build_x64 -C RelWithDebInfo -V
@@ -113,7 +121,7 @@ function(sarxina_add_obs_module name)
 endfunction()
 
 function(sarxina_add_obs_plugin name)
-  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES")
+  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES;LIBRARIES")
   sarxina_add_obs_module(
     ${name}
     TITLE "${_plugin_TITLE}"
@@ -122,6 +130,59 @@ function(sarxina_add_obs_plugin name)
     SOURCES ${_plugin_SOURCES}
     MODULE_SOURCES "${SARXINA_SHARED_DIR}/src/plugin-main.cpp"
     LOCALES "${SARXINA_SHARED_DIR}/data/locale"
-    LIBRARIES sarxina-shared
+    LIBRARIES sarxina-shared ${_plugin_LIBRARIES}
   )
+endfunction()
+
+# sarxina_add_plugins_index(<name>...)
+#
+# The target plugins-index: packages the plugins named, then writes plugins.json at the top of the repository, the list
+# the Sarxina OBS Plugin Manager installs plugins from. For each plugin: its name, the Description from its strings, its
+# version, where its zip will be on the releases (under the tag <name>-v<version>), and the zip's SHA-256. Attach
+# exactly those zips to the releases before plugins.json goes on main: the manager installs nothing whose SHA-256
+# differs.
+function(sarxina_add_plugins_index)
+  set(_index "{\"plugins\": []}")
+  set(_at 0)
+  foreach(_name IN LISTS ARGN)
+    get_target_property(_title ${_name} SARXINA_TITLE)
+    get_target_property(_version ${_name} SARXINA_VERSION)
+    get_target_property(_strings ${_name} SARXINA_STRINGS)
+    file(STRINGS "${_strings}" _description REGEX "^Description=")
+    string(REGEX REPLACE "^Description=\"(.*)\"$" "\\1" _description "${_description}")
+    set(_zip "${_name}-${_version}-windows-x64.zip")
+    set(_entry "{}")
+    foreach(_field IN ITEMS id name description version url zip)
+      if(_field STREQUAL "id")
+        set(_value "${_name}")
+      elseif(_field STREQUAL "name")
+        set(_value "${_title}")
+      elseif(_field STREQUAL "description")
+        set(_value "${_description}")
+      elseif(_field STREQUAL "version")
+        set(_value "${_version}")
+      elseif(_field STREQUAL "url")
+        set(_value "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/${_name}-v${_version}/${_zip}")
+      else()
+        set(_value "${_zip}") # for plugins-index.cmake, which puts the SHA-256 in its place
+      endif()
+      string(REPLACE "\\" "\\\\" _value "${_value}")
+      string(REPLACE "\"" "\\\"" _value "${_value}")
+      string(JSON _entry SET "${_entry}" ${_field} "\"${_value}\"")
+    endforeach()
+    string(JSON _index SET "${_index}" plugins ${_at} "${_entry}")
+    math(EXPR _at "${_at} + 1")
+  endforeach()
+  file(WRITE "${CMAKE_BINARY_DIR}/plugins-index.json" "${_index}")
+
+  add_custom_target(
+    plugins-index
+    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_BINARY_DIR}/plugins-index.json" "-DDIST=${CMAKE_SOURCE_DIR}/dist"
+            "-DOUTPUT=${CMAKE_SOURCE_DIR}/plugins.json" -P "${CMAKE_SOURCE_DIR}/cmake/plugins-index.cmake"
+    COMMENT "Writing plugins.json"
+    VERBATIM
+  )
+  foreach(_name IN LISTS ARGN)
+    add_dependencies(plugins-index ${_name}-package)
+  endforeach()
 endfunction()

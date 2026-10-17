@@ -67,7 +67,7 @@ ChatRouter::Result check(const ChatMessage &message)
 	if (message.userName.empty())
 		return Result::NotText;
 	for (const std::string *text :
-	     {&message.platform, &message.id, &message.userId, &message.userName, &message.displayName})
+	     {&message.platform, &message.id, &message.userId, &message.userName, &message.displayName, &message.rewardId})
 		if (!field(*text))
 			return Result::NotText;
 	for (const ChatMessage::Badge &badge : message.badges)
@@ -120,6 +120,7 @@ sarxina_chat_message view(const ChatMessage &message, std::vector<sarxina_badge>
 		emotes.data(),
 		emotes.size(),
 		message.timeMs,
+		message.rewardId.c_str(),
 	};
 }
 

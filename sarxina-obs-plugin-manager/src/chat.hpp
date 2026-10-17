@@ -30,6 +30,7 @@ struct ChatMessage {
 	std::string text;
 	std::vector<Emote> emotes;
 	int64_t timeMs = 0;
+	std::string rewardId; // the channel point reward it was sent with, or empty
 };
 
 } // namespace sarxina

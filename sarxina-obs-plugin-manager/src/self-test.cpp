@@ -1,5 +1,6 @@
 // The Sarxina OBS Plugin Manager's self-test (see shared/src/self-test.hpp). It needs no OBS and no internet: Twitch
-// and VTube Studio are played by small stand-in websocket servers on this computer.
+// and VTube Studio are played by small stand-in websocket servers on this computer, and GitHub by a stand-in http
+// server, and plugins are installed into a folder of its own that it deletes afterwards.
 //
 //   1. Lines from Twitch become the right chat messages, and the Twitch account OBS is connected to is read from its
 //      profile (only the name).
@@ -7,33 +8,59 @@
 //   3. Commands reach the plugin that registered them, and only when they may.
 //   4. The whole way: a stand-in Twitch sends chat over a real websocket, and a plugin's handler gets the command.
 //   5. VTube Studio over a real websocket: allowing the manager once, logging in with the remembered token, never
-//      asking again on its own, and a plugin's request and its answer.
-// Given a folder, it also paints the dock into dock.png there, and what a plugin's gear shows into settings.png.
+//      asking again on its own, and a plugin's request and its answer, also a long one in many frames.
+//   6. The list of plugins: only zips on Sarxina's releases, over HTTPS, with a SHA-256; and only GitHub's own hosts
+//      for its redirects.
+//   7. Zips: unpacked whole, every file checked, and nothing but the plugin's own files written.
+//   8. Installing, updating and uninstalling, laid out the way a portable OBS and ProgramData want them, with
+//      downloads that go wrong installing nothing, and what is left for the next start finished then.
+//   9. The dock: Install, Uninstall and Update, what each line says, and the list of plugins OBS runs.
+// Given a folder, it also paints the dock into dock.png there, its dropdown into dropdown.png, and what a plugin's gear
+// shows into settings.png. With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_ONLINE=1 it also downloads a released zip from
+// GitHub itself.
 //
 // Inside OBS (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1) checkInObs also lists the plugins that registered through OBS
-// and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would.
+// and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would. pressInObs presses
+// one button in the real dock (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS, see there).
 #include "self-test.hpp"
 
+#include "catalog.hpp"
+#include "fetch.hpp"
+#include "installer.hpp"
 #include "manager-dock.hpp"
 #include "manager.hpp"
 #include "properties-form.hpp"
+#include "store.hpp"
+#include "zip.hpp"
+
+#include <zlib.h>
 
 #include <QCoreApplication>
 #include <QCheckBox>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QLabel>
+#include <QMenu>
 #include <QPixmap>
 #include <QPointer>
+#include <QPushButton>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
+#include <QWidgetAction>
 
 #include <deque>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -43,6 +70,11 @@ using Result = ChatRouter::Result;
 namespace {
 
 // ---- helpers --------------------------------------------------------------------------------------------------------
+
+QString text(const char *key)
+{
+	return QString::fromUtf8(obs_module_text(key));
+}
 
 // Runs Qt's event loop until `done` or until `ms` have passed.
 template<typename Done> bool waitFor(Done done, int ms = 5000)
@@ -118,31 +150,40 @@ public:
 		return true;
 	}
 
-	void send(const QByteArray &text)
+	// A whole text message in one frame, or, given a size, split into frames of that size, the way VTube Studio sends
+	// a long one.
+	void send(const QByteArray &text, qsizetype pieces = 0)
 	{
-		QByteArray frame(1, static_cast<char>(0x81)); // FIN and text: a whole text message
-		if (text.size() < 126) {
-			frame += char(text.size());
-		} else {
-			frame += char(126);
-			frame += char((text.size() >> 8) & 0xFF);
-			frame += char(text.size() & 0xFF);
-		}
-		frame += text;
-		if (client_) {
-			client_->write(frame);
-			client_->flush();
+		const qsizetype size = pieces > 0 ? pieces : std::max<qsizetype>(text.size(), 1);
+		for (qsizetype at = 0; at < text.size() || at == 0; at += size) {
+			const QByteArray piece = text.mid(at, size);
+			const bool first = at == 0, last = at + size >= text.size();
+			// FIN on the last frame; text on the first, continuation on the rest
+			QByteArray frame(1, static_cast<char>((last ? 0x80 : 0x00) | (first ? 0x01 : 0x00)));
+			if (piece.size() < 126) {
+				frame += char(piece.size());
+			} else {
+				frame += char(126);
+				frame += char((piece.size() >> 8) & 0xFF);
+				frame += char(piece.size() & 0xFF);
+			}
+			frame += piece;
+			if (client_) {
+				client_->write(frame);
+				client_->flush();
+			}
 		}
 	}
 	// VTube Studio's answer to a request.
-	void answer(const QJsonObject &request, const char *type, const QJsonObject &data)
+	void answer(const QJsonObject &request, const char *type, const QJsonObject &data, qsizetype pieces = 0)
 	{
 		send(QJsonDocument(QJsonObject{{"apiName", "VTubeStudioPublicAPI"},
 					       {"apiVersion", "1.0"},
 					       {"requestID", request.value("requestID")},
 					       {"messageType", type},
 					       {"data", data}})
-			     .toJson(QJsonDocument::Compact));
+			     .toJson(QJsonDocument::Compact),
+		     pieces);
 	}
 	void drop()
 	{
@@ -224,7 +265,7 @@ struct Heard {
 	sarxina_role role = SARXINA_ROLE_EVERYONE;
 	size_t badges = 0;
 	int chats = 0; // messages from the feed of all of chat
-	std::string lastChat;
+	std::string lastChat, lastReward;
 	bool enabled = false;
 	std::string mode = "real";
 };
@@ -234,6 +275,7 @@ void heardChat(void *data, const sarxina_chat_message *message)
 	Heard &heard = *static_cast<Heard *>(data);
 	heard.chats++;
 	heard.lastChat = message->text;
+	heard.lastReward = message->reward_id;
 }
 
 void record(void *data, const char *command, const char *args, const sarxina_chat_message *message)
@@ -329,7 +371,8 @@ bool parsing()
 				       m),
 		     "a full message");
 	tally.expect(m.platform == "twitch" && m.id == "b34ccfc7" && m.userId == "4242" && m.userName == "sarxina" &&
-			     m.displayName == "Sarxina" && m.text == "Kappa Keepo Kappa" && m.timeMs == 1700000000123,
+			     m.displayName == "Sarxina" && m.text == "Kappa Keepo Kappa" && m.timeMs == 1700000000123 &&
+			     m.rewardId.empty(),
 		     "its fields");
 	tally.expect(m.role == SARXINA_ROLE_BROADCASTER && m.badges.size() == 2 && m.badges[1].name == "subscriber" &&
 			     m.badges[1].version == "12",
@@ -357,6 +400,12 @@ bool parsing()
 	tally.expect(TwitchChat::parse(":p!p@p PRIVMSG #c :no tags", m) && m.role == SARXINA_ROLE_EVERYONE &&
 			     m.userName == "p" && m.text == "no tags",
 		     "a message without tags");
+	// A channel point reward that asks for text arrives as the text, with the reward's id.
+	tally.expect(TwitchChat::parse("@custom-reward-id=0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77;display-name=Viewer;"
+				       "user-id=9 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #sarxina :drop it",
+				       m) &&
+			     m.rewardId == "0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77" && m.text == "drop it",
+		     "a channel point reward with text");
 	for (const char *other : {"PING :tmi.twitch.tv", ":tmi.twitch.tv 001 justinfan1 :Welcome, GLHF!",
 				  ":justinfan1!justinfan1@justinfan1.tmi.twitch.tv JOIN #c", ":tmi.twitch.tv RECONNECT",
 				  "@id=1 :p!p@p PRIVMSG #c", "", "@", ":"})
@@ -445,6 +494,9 @@ bool checks()
 	ChatMessage badEmote = chatter("viewer", SARXINA_ROLE_EVERYONE, "hi");
 	badEmote.emotes.push_back({"25", 1, 9});
 	tally.expect(router.route(badEmote, 0).result == Result::NotText, "an emote past the end");
+	ChatMessage badReward = chatter("viewer", SARXINA_ROLE_EVERYONE, "hi");
+	badReward.rewardId = "one\ntwo";
+	tally.expect(router.route(badReward, 0).result == Result::NotText, "a reward id with a line break");
 
 	return tally.report("checks", "messages handled as expected");
 }
@@ -506,7 +558,8 @@ bool routing()
 			     heard.display == "Viewer6" && heard.text == "!hello Kappa",
 		     "the message as the plugin sees it");
 
-	tally.expect(heard.chats == 18 && heard.lastChat == "!hello Kappa", "all of chat for the plugin that wants it");
+	tally.expect(heard.chats == 18 && heard.lastChat == "!hello Kappa" && heard.lastReward.empty(),
+		     "all of chat for the plugin that wants it");
 
 	plugin.enabled = false;
 	step(20000, chatter("viewer", everyone, "!hello"), Result::PluginOff, "a plugin that is off");
@@ -526,9 +579,7 @@ bool twitchConnection()
 	Heard heard;
 	const sarxina_plugin_info info = testPlugin(heard);
 	Manager manager(Manager::Use::SelfTest, twitch.url());
-	tally.expect(manager.add(&info) && !heard.enabled, "a new plugin registered, not added yet");
-	manager.setEnabled(*manager.plugins()[0], true);
-	tally.expect(heard.enabled, "added");
+	tally.expect(manager.add(&info) && heard.enabled, "a plugin registered, and on");
 
 	const auto handshake = [&](const char *when) {
 		QByteArray cap, nick, join;
@@ -559,6 +610,11 @@ bool twitchConnection()
 	tally.expect(heard.runs == 1 && heard.args == "from the socket" && heard.role == SARXINA_ROLE_MODERATOR &&
 			     heard.display == "Mod",
 		     "the plugin's handler got the command");
+	twitch.send("@custom-reward-id=0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77;display-name=Viewer;id=a3;user-id=8 "
+		    ":viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #sarxina :a redeem\r\n");
+	tally.expect(waitFor([&] { return heard.chats == 3; }) && heard.lastChat == "a redeem" &&
+			     heard.lastReward == "0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77",
+		     "a channel point reward reaching the feed with its id");
 
 	twitch.send(":tmi.twitch.tv RECONNECT");
 	tally.expect(waitFor([&] { return twitch.connections == 2; }), "connecting again when Twitch asks");
@@ -626,6 +682,20 @@ bool vtubeStudio()
 			     answer.data.value("availableHotkeys").toArray().size() == 1,
 		     "its answer reaching the plugin");
 
+	// A long answer, split into frames of 1016 bytes as VTube Studio sends it, with braces inside its strings.
+	Answer longAnswer;
+	const sarxina_vts_request again{"HotkeysInCurrentModelRequest", nullptr, answered, &longAnswer};
+	manager.vtsRequest(again);
+	QJsonArray many;
+	for (int i = 0; i < 60; i++)
+		many.append(QJsonObject{{"name", QStringLiteral("Hotkey {%1] \"x\"").arg(i)}, {"hotkeyID", QString::number(i)}});
+	tally.expect(vts.nextJson(request) && type() == "HotkeysInCurrentModelRequest" && !request.contains("data"),
+		     "a request without data");
+	vts.answer(request, "HotkeysInCurrentModelResponse", {{"modelLoaded", true}, {"availableHotkeys", many}}, 1016);
+	tally.expect(waitFor([&] { return longAnswer.calls == 1; }) && longAnswer.ok &&
+			     longAnswer.data.value("availableHotkeys").toArray().size() == 60,
+		     "a long answer in many frames reaching the plugin whole");
+
 	Answer refused;
 	const sarxina_vts_request trigger{"HotkeyTriggerRequest", "{\"hotkeyID\":\"nope\"}", answered, &refused};
 	manager.vtsRequest(trigger);
@@ -666,6 +736,662 @@ bool vtubeStudio()
 	return tally.report("VTube Studio", "steps as expected");
 }
 
+// ---- 6. the list of plugins -----------------------------------------------------------------------------------------
+
+QByteArray sha(const QByteArray &bytes)
+{
+	return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+}
+
+QJsonObject listed(const QString &id, const QString &version, const QString &url, const QByteArray &sha256)
+{
+	return {{"id", id},
+		{"name", id.toUpper()},
+		{"description", "Only here for the self-test."},
+		{"version", version},
+		{"url", url},
+		{"sha256", QString::fromLatin1(sha256)}};
+}
+
+QByteArray listOf(const QJsonArray &plugins)
+{
+	return QJsonDocument(QJsonObject{{"plugins", plugins}}).toJson(QJsonDocument::Compact);
+}
+
+bool catalog()
+{
+	Tally tally;
+	const Source github = Source::github();
+	tally.expect(github.index == "https://raw.githubusercontent.com/Sarxina/sarxina-obs-plugins/main/plugins.json" &&
+			     github.downloads == "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/" &&
+			     !github.local,
+		     "GitHub: Sarxina's repository, over HTTPS");
+	const QByteArray hash(64, 'a');
+	const QString release = github.downloads + "slinglive-v1.3.0/slinglive-1.3.0-windows-x64.zip";
+	const struct {
+		const char *what;
+		QJsonObject entry;
+		bool kept;
+	} cases[] = {
+		{"a plugin as released", listed("slinglive", "1.3.0", release, hash), true},
+		{"a zip on another repository",
+		 listed("a", "1.0.0", "https://github.com/someone/else/releases/download/v1/a.zip", hash), false},
+		{"a zip over http", listed("b", "1.0.0", "http://github.com/Sarxina/sarxina-obs-plugins/releases/download/t/b.zip", hash),
+		 false},
+		{"a way out of the releases with ..", listed("c", "1.0.0", github.downloads + "../../../evil/c.zip", hash), false},
+		{"a way out with %2e", listed("d", "1.0.0", github.downloads + "%2e%2e/x/d.zip", hash), false},
+		{"a query", listed("e", "1.0.0", github.downloads + "t/e.zip?x=1", hash), false},
+		{"something other than a zip", listed("f", "1.0.0", github.downloads + "t/f.exe", hash), false},
+		{"no SHA-256", listed("g", "1.0.0", github.downloads + "t/g.zip", ""), false},
+		{"an upper-case SHA-256", listed("h", "1.0.0", github.downloads + "t/h.zip", QByteArray(64, 'A')), false},
+		{"a version that is not x.y.z", listed("i", "1.0", github.downloads + "t/i.zip", hash), false},
+		{"an id that is not a module name", listed("../j", "1.0.0", github.downloads + "t/j.zip", hash), false},
+		{"the manager itself",
+		 listed("sarxina-obs-plugin-manager", "1.0.0", github.downloads + "t/m.zip", hash), false},
+		{"the same plugin again", listed("slinglive", "1.3.1", release, hash), false},
+	};
+	QJsonArray entries;
+	for (const auto &c : cases)
+		entries.append(c.entry);
+	std::vector<Available> list;
+	QStringList problems;
+	tally.expect(readIndex(listOf(entries), github, list, problems), "a list read");
+	tally.expect(list.size() == 1 && list[0].id == "slinglive" && list[0].name == "SLINGLIVE" &&
+			     list[0].version == "1.3.0" && list[0].url == release && list[0].sha256 == hash,
+		     "only the plugin as released kept");
+	tally.expect(problems.size() == std::size(cases) - 1, "every other one named as left out");
+	tally.expect(!readIndex("not json", github, list, problems) && list.empty() &&
+			     !readIndex("{\"plugins\":{}}", github, list, problems),
+		     "a file that is not a list");
+
+	tally.expect(newer("1.10.0", "1.9.2") && newer("2.0.0", "1.99.99") && !newer("1.3.0", "1.3.0") &&
+			     !newer("1.2.9", "1.3.0") && !newer("1.4.0", "") && !newer("x", "1.0.0"),
+		     "which version is newer");
+
+	const auto test = Source::testServer("http://127.0.0.1:8790");
+	tally.expect(test && test->local && test->index == "http://127.0.0.1:8790/plugins.json" &&
+			     test->downloads == "http://127.0.0.1:8790/",
+		     "a test server on this computer");
+	tally.expect(Source::testServer("http://localhost:1/") && Source::testServer("http://[::1]:2"),
+		     "localhost and ::1 too");
+	for (const char *other : {"http://192.168.1.5:8790", "http://example.com:80", "https://127.0.0.1:8790",
+				  "http://127.0.0.1", "http://user@127.0.0.1:1", "http://127.0.0.1:1/path", "127.0.0.1:1"})
+		tally.expect(!Source::testServer(other), std::string("not a test server: ") + other);
+
+	tally.expect(Fetcher::githubHost("https://github.com/Sarxina/x") &&
+			     Fetcher::githubHost("https://release-assets.githubusercontent.com/a?b=c") &&
+			     Fetcher::githubHost("https://objects.githubusercontent.com/a"),
+		     "GitHub's download hosts");
+	for (const char *other : {"http://objects.githubusercontent.com/a", "https://githubusercontent.com.evil.example/a",
+				  "https://evil.example/github.com", "https://github.com.evil.example/",
+				  "https://user@github.com/", "https://github.com:8443/"})
+		tally.expect(!Fetcher::githubHost(other), std::string("not GitHub: ") + other);
+	return tally.report("list of plugins", "checks as expected");
+}
+
+// ---- 7. zips --------------------------------------------------------------------------------------------------------
+
+struct Packed {
+	QString name;
+	QByteArray data;
+};
+
+// A zip as the release zips are made, its files stored or deflated, with the folder entries before them.
+QByteArray makeZip(const std::vector<Packed> &files, bool deflate)
+{
+	const auto u16 = [](QByteArray &out, uint32_t v) { out.append(char(v & 0xFF)).append(char((v >> 8) & 0xFF)); };
+	const auto u32 = [&u16](QByteArray &out, uint32_t v) {
+		u16(out, v & 0xFFFF);
+		u16(out, v >> 16);
+	};
+	QByteArray zip, directory;
+	uint32_t count = 0;
+	const auto add = [&](const QByteArray &name, const QByteArray &data) {
+		QByteArray packed = data;
+		const bool folder = name.endsWith('/');
+		const bool deflated = deflate && !folder;
+		if (deflated) {
+			z_stream stream{};
+			deflateInit2(&stream, 9, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+			packed.resize(static_cast<qsizetype>(deflateBound(&stream, static_cast<uLong>(data.size()))));
+			stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(data.constData()));
+			stream.avail_in = static_cast<uInt>(data.size());
+			stream.next_out = reinterpret_cast<Bytef *>(packed.data());
+			stream.avail_out = static_cast<uInt>(packed.size());
+			::deflate(&stream, Z_FINISH);
+			packed.resize(static_cast<qsizetype>(stream.total_out));
+			deflateEnd(&stream);
+		}
+		const uint32_t crc = static_cast<uint32_t>(
+			crc32(crc32(0L, Z_NULL, 0), reinterpret_cast<const Bytef *>(data.constData()), static_cast<uInt>(data.size())));
+		const uint32_t offset = static_cast<uint32_t>(zip.size());
+		// The local header without sizes (bit 3: they follow the data), as libarchive writes them
+		u32(zip, 0x04034b50), u16(zip, 20), u16(zip, 8), u16(zip, deflated ? 8 : 0), u16(zip, 0), u16(zip, 0);
+		u32(zip, 0), u32(zip, 0), u32(zip, 0), u16(zip, static_cast<uint32_t>(name.size())), u16(zip, 0);
+		zip += name;
+		zip += packed;
+		u32(zip, 0x08074b50), u32(zip, crc), u32(zip, static_cast<uint32_t>(packed.size())),
+			u32(zip, static_cast<uint32_t>(data.size()));
+		u32(directory, 0x02014b50), u16(directory, 0x031E), u16(directory, 20), u16(directory, 8),
+			u16(directory, deflated ? 8 : 0), u16(directory, 0), u16(directory, 0), u32(directory, crc);
+		u32(directory, static_cast<uint32_t>(packed.size())), u32(directory, static_cast<uint32_t>(data.size()));
+		u16(directory, static_cast<uint32_t>(name.size())), u16(directory, 0), u16(directory, 0), u16(directory, 0);
+		u16(directory, 0), u32(directory, 0), u32(directory, offset);
+		directory += name;
+		count++;
+	};
+	QStringList folders;
+	for (const Packed &file : files) {
+		const QStringList parts = file.name.split('/');
+		for (int i = 1; i < parts.size(); i++) {
+			const QString folder = parts.mid(0, i).join('/') + '/';
+			if (!folders.contains(folder)) {
+				folders << folder;
+				add(folder.toLatin1(), {});
+			}
+		}
+		add(file.name.toLatin1(), file.data);
+	}
+	const uint32_t at = static_cast<uint32_t>(zip.size());
+	zip += directory;
+	u32(zip, 0x06054b50), u16(zip, 0), u16(zip, 0), u16(zip, count), u16(zip, count);
+	u32(zip, static_cast<uint32_t>(directory.size())), u32(zip, at), u16(zip, 0);
+	return zip;
+}
+
+// A plugin's zip as released: its DLL (only bytes here, never loaded), its strings and its licence.
+QByteArray pluginZip(const QString &id, const QByteArray &dll, bool deflate = true)
+{
+	return makeZip({{"obs-plugins/64bit/" + id + ".dll", dll},
+			{"data/obs-plugins/" + id + "/LICENSE.txt", QByteArray(3000, 'L')},
+			{"data/obs-plugins/" + id + "/locale/en-US.ini", "Description=\"Only here for the self-test.\"\n"}},
+		       deflate);
+}
+
+QByteArray readFile(const QString &path)
+{
+	QFile file(path);
+	return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray("(none)");
+}
+
+bool zips()
+{
+	Tally tally;
+	const QByteArray dll = QByteArray("MZ") + QByteArray(70000, '\x01') + "the end";
+	std::vector<ZipFile> files;
+	QString why;
+	for (const bool deflate : {true, false}) {
+		const char *how = deflate ? " (deflated)" : " (stored)";
+		tally.expect(readZip(pluginZip("one", dll, deflate), files, why), std::string("a plugin's zip read") + how);
+		tally.expect(files.size() == 3 && files[0].name == "obs-plugins/64bit/one.dll" && files[0].data == dll &&
+				     files[2].name == "data/obs-plugins/one/locale/en-US.ini",
+			     std::string("its three files, without the folders") + how);
+	}
+
+	// One byte of the DLL changed after its CRC was written
+	QByteArray changed = pluginZip("one", dll, false);
+	changed[changed.indexOf("the end")] = 'T';
+	tally.expect(!readZip(changed, files, why) && files.empty(), "a file that is not what the zip says");
+	const QByteArray whole = pluginZip("one", dll);
+	tally.expect(!readZip(whole.left(whole.size() - 30), files, why) && !readZip("PK", files, why) &&
+			     !readZip(QByteArray(100, '\0'), files, why),
+		     "a cut-off zip and things that are no zip");
+
+	// What may be in a plugin's zip: obs-plugins/64bit/<id>.dll and data/obs-plugins/<id>/..., nothing else.
+	QTemporaryDir folder;
+	const Layout layout{Layout::Kind::ObsFolder, folder.path()};
+	const auto refused = [&](const std::vector<Packed> &packed, const std::string &what) {
+		std::vector<ZipFile> unpacked;
+		QString problem;
+		tally.expect(readZip(makeZip(packed, true), unpacked, problem) &&
+				     !files::write(layout, "one", unpacked, false, problem) &&
+				     QDir(folder.path()).entryList(QDir::NoDotAndDotDot | QDir::AllEntries).isEmpty(),
+			     "refused, nothing written: " + what);
+	};
+	const Packed theDll{"obs-plugins/64bit/one.dll", dll};
+	refused({theDll, {"data/obs-plugins/one/../../../escaped.txt", "x"}}, "a way out with ..");
+	refused({theDll, {"data/obs-plugins/one/../two/x.ini", "x"}}, "another plugin's data");
+	refused({theDll, {"obs-plugins/64bit/other.dll", "MZ"}}, "a second DLL");
+	refused({theDll, {"bin/64bit/obs64.exe", "MZ"}}, "a file of OBS's");
+	refused({theDll, {"data/obs-plugins/one/x:stream", "x"}}, "a stream name");
+	refused({theDll, {"data/obs-plugins/one/trailing.", "x"}}, "a name Windows would change");
+	refused({{"data/obs-plugins/one/locale/en-US.ini", "x"}}, "no DLL");
+	refused({theDll, {"Obs-Plugins/64bit/one.dll", "MZ"}}, "the DLL twice");
+	return tally.report("zips", "checks as expected");
+}
+
+// ---- 8. installing, over a stand-in for GitHub ----------------------------------------------------------------------
+
+// An http server on this computer standing in for GitHub: it answers each GET from a table of paths.
+class StandInGitHub : public QObject {
+public:
+	struct Answer {
+		int status = 200;
+		QByteArray body;
+		QByteArray location; // for a redirect
+	};
+
+	StandInGitHub()
+	{
+		server_.listen(QHostAddress::LocalHost, 0);
+		connect(&server_, &QTcpServer::newConnection, this, [this] {
+			while (QTcpSocket *socket = server_.nextPendingConnection()) {
+				auto *buffer = new QByteArray;
+				connect(socket, &QTcpSocket::disconnected, socket, [socket, buffer] {
+					delete buffer;
+					socket->deleteLater();
+				});
+				connect(socket, &QTcpSocket::readyRead, this, [this, socket, buffer] {
+					*buffer += socket->readAll();
+					if (!buffer->contains("\r\n\r\n"))
+						return;
+					const QByteArray path = buffer->split(' ').value(1);
+					buffer->clear();
+					requests.push_back(path);
+					const auto found = answers.find(path);
+					const Answer answer = found != answers.end() ? found->second : Answer{404, "not here", {}};
+					QByteArray reply = "HTTP/1.1 " + QByteArray::number(answer.status) + " X\r\nContent-Length: " +
+							   QByteArray::number(answer.body.size()) + "\r\nConnection: close\r\n";
+					if (!answer.location.isEmpty())
+						reply += "Location: " + answer.location + "\r\n";
+					socket->write(reply + "\r\n" + answer.body);
+					socket->disconnectFromHost();
+				});
+			}
+		});
+	}
+
+	Source source() const { return *Source::testServer(QStringLiteral("http://127.0.0.1:%1").arg(server_.serverPort())); }
+	QString url(const char *path) const { return source().downloads + path; }
+
+	std::map<QByteArray, Answer> answers;
+	std::vector<QByteArray> requests;
+
+private:
+	QTcpServer server_;
+};
+
+// What OBS loaded, as the self-test says: plugin id -> what OBS did with it.
+using Pretend = std::map<QString, Store::Loaded>;
+
+Store::Setup setupFor(const StandInGitHub &github, const Layout &layout, const Pretend *loaded, const QString &remembered)
+{
+	Store::Setup setup;
+	setup.source = github.source();
+	setup.layout = layout;
+	setup.remembered = remembered;
+	if (loaded)
+		setup.loaded = [loaded](const QString &id) {
+			const auto found = loaded->find(id);
+			return found != loaded->end() ? found->second : Store::Loaded();
+		};
+	return setup;
+}
+
+bool writeFile(const QString &path, const QByteArray &bytes)
+{
+	QDir().mkpath(QFileInfo(path).absolutePath());
+	QFile file(path);
+	return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+}
+
+bool installing()
+{
+	Tally tally;
+	StandInGitHub github;
+	const QByteArray oneDll = QByteArray("MZ one ") + QByteArray(5000, 'x');
+	const QByteArray twoDll = QByteArray("MZ two 1.1.0 ") + QByteArray(5000, 'y');
+	const QByteArray oneZip = pluginZip("one", oneDll), twoZip = pluginZip("two", twoDll);
+	github.answers["/one.zip"] = {200, oneZip, {}};
+	github.answers["/two.zip"] = {200, twoZip, {}};
+	github.answers["/wrong.zip"] = {200, oneZip, {}};
+	github.answers["/away.zip"] = {302, {}, "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/t/a.zip"};
+	github.answers["/big.zip"] = {200, QByteArray(kLargestZip + 1, 'B'), {}};
+	github.answers["/notazip.zip"] = {200, QByteArray("not a zip"), {}};
+	github.answers["/plugins.json"] = {
+		200,
+		listOf({listed("one", "1.0.0", github.url("one.zip"), sha(oneZip)),
+			listed("two", "1.1.0", github.url("two.zip"), sha(twoZip)),
+			listed("wrong", "1.0.0", github.url("wrong.zip"), QByteArray(64, '0')),
+			listed("gone", "1.0.0", github.url("gone.zip"), sha(oneZip)),
+			listed("away", "1.0.0", github.url("away.zip"), sha(oneZip)),
+			listed("big", "1.0.0", github.url("big.zip"), sha(oneZip)),
+			listed("notazip", "1.0.0", github.url("notazip.zip"), sha("not a zip")),
+			listed("elsewhere", "1.0.0", github.url("one.zip"), sha(oneZip))}),
+		{}};
+
+	for (const Layout::Kind kind : {Layout::Kind::ObsFolder, Layout::Kind::ProgramData}) {
+		const bool portable = kind == Layout::Kind::ObsFolder;
+		const std::string in = portable ? " (portable OBS)" : " (ProgramData)";
+		QTemporaryDir folder;
+		const Layout layout{kind, folder.path()};
+		const QString remembered = folder.filePath("config/store.json");
+		Pretend loaded;
+		// "two" 1.0.0 runs from where the manager installs; "elsewhere" was put into OBS's own folder by hand.
+		const QString twoDllPath = layout.dll("two");
+		writeFile(twoDllPath, "MZ two 1.0.0");
+		writeFile(layout.data("two") + "/locale/en-US.ini", "old");
+		loaded["two"] = {Store::Loaded::State::Yes, twoDllPath, "1.0.0"};
+		loaded["elsewhere"] = {Store::Loaded::State::Yes, folder.filePath("Program Files/obs-plugins/64bit/elsewhere.dll"),
+				       "1.0.0"};
+
+		auto store = std::make_unique<Store>(setupFor(github, layout, &loaded, remembered));
+		std::vector<std::pair<QString, bool>> switched;
+		QObject::connect(store.get(), &Store::switchPlugin,
+				 [&switched](const QString &id, bool on) { switched.emplace_back(id, on); });
+		const auto settled = [&store](const QString &id) {
+			return waitFor([&] { return !store->state(id).busy; }, 10000);
+		};
+
+		tally.expect(store->list() == Store::List::Waiting, "waiting for the list" + in);
+		store->start();
+		tally.expect(waitFor([&] { return store->list() == Store::List::Ready; }) && store->available().size() == 8,
+			     "the list fetched" + in);
+
+		// Installing one OBS is not running
+		Store::State one = store->state("one");
+		tally.expect(!one.installed && !one.busy && one.note.isEmpty() && !store->restartNeeded(), "one: not installed" + in);
+		store->install("one");
+		tally.expect(store->state("one").busy, "one: downloading" + in);
+		tally.expect(settled("one"), "one: downloaded" + in);
+		one = store->state("one");
+		tally.expect(one.installed && one.change == Store::Change::Installed && one.note.isEmpty() &&
+				     store->restartNeeded(),
+			     "one: installed, waiting for a restart" + in);
+		tally.expect(readFile(layout.dll("one")) == oneDll &&
+				     readFile(layout.data("one") + "/locale/en-US.ini").startsWith("Description=") &&
+				     files::exists(layout.data("one") + "/LICENSE.txt") && !files::exists(layout.dll("one") + ".part"),
+			     "one: its files where OBS loads them" + in);
+		tally.expect(portable ? layout.dll("one") == folder.path() + "/obs-plugins/64bit/one.dll"
+				      : layout.dll("one") == folder.path() + "/one/bin/64bit/one.dll" &&
+						layout.data("one") == folder.path() + "/one/data",
+			     "one: laid out the way OBS looks for it" + in);
+		store->uninstall("one");
+		one = store->state("one");
+		tally.expect(!one.installed && one.change == Store::Change::None && !files::exists(layout.dll("one")) &&
+				     !files::exists(layout.data("one")) && !store->restartNeeded(),
+			     "one: uninstalled before OBS ever ran it, at once" + in);
+		tally.expect(portable || !files::exists(layout.folder("one")), "one: its own folder gone too" + in);
+
+		// Downloads that go wrong install nothing
+		const auto fails = [&](const char *id, const char *problemKey, const std::string &what) {
+			store->install(id);
+			settled(id);
+			const Store::State state = store->state(id);
+			const QString expected = text(problemKey).left(20);
+			tally.expect(!state.installed && state.change == Store::Change::None && state.note.startsWith(expected) &&
+					     !files::exists(layout.dll(id)) && !files::exists(layout.dll(id) + ".part"),
+				     what + ", nothing written" + in);
+		};
+		fails("wrong", "Problem.Checksum", "a zip whose SHA-256 does not match");
+		fails("gone", "Problem.Download", "a zip that is not there");
+		fails("away", "Problem.Download", "a test server sending it elsewhere");
+		fails("big", "Problem.Download", "a zip that is too big");
+		fails("notazip", "Problem.Zip", "a download that is not a zip");
+
+		// Updating "two" while OBS runs 1.0.0
+		Store::State two = store->state("two");
+		tally.expect(two.installed && two.canUpdate && two.newVersion == "1.1.0" && store->running("two"),
+			     "two: running, with an update" + in);
+		store->update("two");
+		settled("two");
+		two = store->state("two");
+		tally.expect(two.installed && !two.canUpdate && two.change == Store::Change::Updated &&
+				     readFile(twoDllPath) == twoDll && readFile(twoDllPath + ".old") == "MZ two 1.0.0",
+			     "two: updated, the running DLL moved aside" + in);
+
+		// Uninstalling it while OBS runs it, taking that back, and uninstalling it again
+		store->uninstall("two");
+		two = store->state("two");
+		tally.expect(!two.installed && two.change == Store::Change::Uninstalled && !store->running("two") &&
+				     !files::exists(twoDllPath) && readFile(twoDllPath + ".uninstalled") == "MZ two 1.0.0" &&
+				     switched.size() == 1 && switched[0] == std::make_pair(QString("two"), false),
+			     "two: uninstalled, its running DLL renamed, switched off" + in);
+		store->install("two");
+		two = store->state("two");
+		tally.expect(two.installed && two.change == Store::Change::None && store->running("two") &&
+				     readFile(twoDllPath) == "MZ two 1.0.0" && switched.size() == 2 && switched[1].second &&
+				     !store->restartNeeded(),
+			     "two: the uninstall taken back, on again" + in);
+		store->uninstall("two");
+		tally.expect(store->state("two").change == Store::Change::Uninstalled && store->restartNeeded(),
+			     "two: uninstalled again" + in);
+
+		// One that was put into OBS's own folder by hand is left alone
+		store->uninstall("elsewhere");
+		const Store::State elsewhere = store->state("elsewhere");
+		tally.expect(elsewhere.installed && elsewhere.change == Store::Change::None &&
+				     elsewhere.note.startsWith(text("Problem.ByHand").left(20)) && !elsewhere.canUpdate,
+			     "a plugin installed by hand elsewhere: not touched, and why" + in);
+
+		// The next time OBS starts: "two" did not load, and what the uninstall left is deleted.
+		store.reset();
+		loaded.erase("two");
+		store = std::make_unique<Store>(setupFor(github, layout, &loaded, remembered));
+		tally.expect(!files::exists(twoDllPath + ".uninstalled") && !files::exists(twoDllPath + ".old") &&
+				     !files::exists(layout.data("two")) && (portable || !files::exists(layout.folder("two"))),
+			     "next start: what the uninstall left deleted" + in);
+		tally.expect(!store->state("two").installed && !store->restartNeeded(), "next start: two not installed" + in);
+		tally.expect(store->list() == Store::List::Waiting, "next start: a test server's list never kept" + in);
+		store->start();
+		waitFor([&] { return store->list() == Store::List::Ready; });
+
+		// An update left for the next start
+		writeFile(twoDllPath, "MZ two 1.0.0");
+		loaded["two"] = {Store::Loaded::State::Yes, twoDllPath, "1.0.0"};
+		store.reset();
+		store = std::make_unique<Store>(setupFor(github, layout, &loaded, remembered));
+		store->start();
+		waitFor([&] { return store->list() == Store::List::Ready; });
+		store->update("two");
+		settled("two");
+		tally.expect(files::exists(twoDllPath + ".old"), "an update before a restart" + in);
+		store.reset();
+		loaded["two"].version = "1.1.0";
+		store = std::make_unique<Store>(setupFor(github, layout, &loaded, remembered));
+		tally.expect(!files::exists(twoDllPath + ".old") && readFile(twoDllPath) == twoDll, "next start: the old DLL deleted" + in);
+		store->start();
+		waitFor([&] { return store->list() == Store::List::Ready; });
+		tally.expect(!store->state("two").canUpdate && store->state("two").installed, "next start: up to date" + in);
+
+		// Installed, but OBS did not load it
+		store->install("one");
+		settled("one");
+		store.reset();
+		store = std::make_unique<Store>(setupFor(github, layout, &loaded, remembered));
+		store->start();
+		const Store::State notLoaded = store->state("one");
+		tally.expect(notLoaded.installed && notLoaded.note == text("Note.NotLoaded"), "installed, but not loaded: said so" + in);
+		store->uninstall("one");
+		tally.expect(!files::exists(layout.dll("one")), "and it can be uninstalled at once" + in);
+	}
+
+	// While OBS is still loading plugins, one loaded after the manager counts once it is there, and from the end of
+	// loading on, what OBS loaded is noted for good.
+	{
+		QTemporaryDir folder;
+		Pretend later;
+		Store store(setupFor(github, {Layout::Kind::ObsFolder, folder.path()}, &later, {}));
+		tally.expect(!store.state("three").installed, "a plugin OBS has not loaded yet");
+		later["three"] = {Store::Loaded::State::Yes, folder.filePath("obs-plugins/64bit/three.dll"), "1.0.0"};
+		tally.expect(store.state("three").installed && store.running("three"), "the same once OBS has loaded it");
+		// As the dock does: every line shown again once OBS has finished loading
+		QObject::connect(&store, &Store::listChanged, [&store] { store.state("three"); });
+		store.start();
+		later.erase("three");
+		tally.expect(store.state("three").installed, "noted once OBS has finished loading");
+	}
+
+	// No list: GitHub cannot be reached
+	{
+		QTemporaryDir folder;
+		StandInGitHub nothing;
+		Store::Setup setup = setupFor(nothing, {Layout::Kind::ObsFolder, folder.path()}, nullptr, {});
+		setup.source = *Source::testServer("http://127.0.0.1:9"); // nothing listens there
+		Store store(setup);
+		store.start();
+		tally.expect(waitFor([&] { return store.list() == Store::List::Failed; }, 15000) && store.available().empty(),
+			     "no list when the server cannot be reached");
+	}
+	return tally.report("installing", "steps as expected");
+}
+
+// ---- 9. the dock ----------------------------------------------------------------------------------------------------
+
+// The dropdown with every plugin.
+QMenu *dropdown(ManagerDock &dock)
+{
+	for (QToolButton *button : dock.findChildren<QToolButton *>())
+		if (button->menu())
+			return button->menu();
+	return nullptr;
+}
+
+// A plugin's line in the dropdown, and what is on it.
+QWidget *choice(ManagerDock &dock, const QString &id)
+{
+	QMenu *menu = dropdown(dock);
+	return menu ? menu->findChild<QWidget *>("plugin:" + id) : nullptr;
+}
+
+QString button(ManagerDock &dock, const QString &id, const char *which = "install")
+{
+	QWidget *row = choice(dock, id);
+	QPushButton *button = row ? row->findChild<QPushButton *>(which) : nullptr;
+	return !button ? QStringLiteral("(none)") : button->isHidden() ? QStringLiteral("(hidden)") : button->text();
+}
+
+QString note(ManagerDock &dock, const QString &id)
+{
+	QWidget *row = choice(dock, id);
+	QLabel *label = row ? row->findChild<QLabel *>("note") : nullptr;
+	return !label || label->isHidden() ? QString() : label->text();
+}
+
+void press(ManagerDock &dock, const QString &id, const char *which = "install")
+{
+	if (QWidget *row = choice(dock, id))
+		if (QPushButton *button = row->findChild<QPushButton *>(which))
+			button->click();
+}
+
+// A plugin's line in the list, by its name, and whether it shows.
+QWidget *line(ManagerDock &dock, const char *name)
+{
+	for (QCheckBox *title : dock.findChildren<QCheckBox *>())
+		if (title->property("class").toString() == "indicator-expand" && title->text() == name)
+			return title->parentWidget();
+	return nullptr;
+}
+
+bool shown(ManagerDock &dock, const char *name)
+{
+	QWidget *found = line(dock, name);
+	return found && !found->isHidden();
+}
+
+bool hasGear(ManagerDock &dock, const char *name)
+{
+	QWidget *found = line(dock, name);
+	QToolButton *gear = found ? found->findChild<QToolButton *>() : nullptr;
+	return gear && !gear->isHidden();
+}
+
+QLabel *dockSays(ManagerDock &dock, const QString &words)
+{
+	for (QLabel *label : dock.findChildren<QLabel *>())
+		if (label->text() == words && !label->isHidden())
+			return label;
+	return nullptr;
+}
+
+bool theDock()
+{
+	Tally tally;
+	StandInGitHub github;
+	QTemporaryDir folder;
+	const Layout layout{Layout::Kind::ObsFolder, folder.path()};
+	const QByteArray zip = pluginZip("fresh", "MZ fresh");
+	github.answers["/fresh.zip"] = {200, zip, {}};
+	github.answers["/plugins.json"] = {200,
+					   listOf({listed("fresh", "1.0.0", github.url("fresh.zip"), sha(zip)),
+						   listed("first", "1.2.0", github.url("fresh.zip"), sha(zip))}),
+					   {}};
+	// "first" runs and is registered with the manager, "second" too but is not on the list.
+	Pretend loaded;
+	writeFile(layout.dll("first"), "MZ first");
+	writeFile(layout.dll("second"), "MZ second");
+	loaded["first"] = {Store::Loaded::State::Yes, layout.dll("first"), "1.0.0"};
+	loaded["second"] = {Store::Loaded::State::Yes, layout.dll("second"), "1.0.0"};
+
+	Heard first, second;
+	const sarxina_plugin_info one = testPlugin(first, "first", "Test plugin");
+	sarxina_plugin_info two = testPlugin(second, "second", "Another test plugin");
+	two.get_properties = nullptr;
+	Manager manager(Manager::Use::SelfTest, TwitchChat::kServer, setupFor(github, layout, &loaded, {}));
+	ManagerDock dock(manager); // made first, as in OBS, where plugins register once the dock is there
+	dock.setAttribute(Qt::WA_DontShowOnScreen);
+	dock.show();
+	tally.expect(dropdown(dock) && dropdown(dock)->parentWidget()->isEnabled() && dockSays(dock, text("NoneInstalled")),
+		     "nothing yet: the dropdown, and the list says it is empty");
+	manager.add(&one);
+	manager.add(&two);
+	tally.expect(first.enabled && second.enabled && shown(dock, "Test plugin") && shown(dock, "Another test plugin") &&
+			     hasGear(dock, "Test plugin") && !hasGear(dock, "Another test plugin") &&
+			     !dockSays(dock, text("NoneInstalled")),
+		     "installed plugins run, in the list, a gear for the one with settings");
+	tally.expect(button(dock, "first") == text("Uninstall") && button(dock, "second") == text("Uninstall"),
+		     "their buttons say Uninstall");
+
+	manager.start();
+	tally.expect(waitFor([&] { return manager.store().list() == Store::List::Ready; }), "the list fetched");
+	tally.expect(button(dock, "fresh") == text("Install") && note(dock, "fresh").isEmpty() && !shown(dock, "FRESH"),
+		     "a plugin on the list that is not installed: Install, not in the list");
+	tally.expect(button(dock, "first", "update") == text("Update").arg("1.2.0") &&
+			     button(dock, "second", "update") == "(hidden)" && button(dock, "fresh", "update") == "(hidden)",
+		     "Update only for the one with a newer version");
+
+	press(dock, "fresh");
+	tally.expect(button(dock, "fresh") == text("Downloading"), "pressing Install: downloading");
+	waitFor([&] { return !manager.store().state("fresh").busy; });
+	tally.expect(button(dock, "fresh") == text("Uninstall") && note(dock, "fresh") == text("Restart") &&
+			     dockSays(dock, text("Restart")) && !shown(dock, "FRESH"),
+		     "installed: Uninstall, and restart OBS to finish");
+	press(dock, "fresh");
+	tally.expect(button(dock, "fresh") == text("Install") && note(dock, "fresh").isEmpty() && !dockSays(dock, text("Restart")),
+		     "uninstalled again before the restart: Install, nothing to finish");
+
+	press(dock, "first");
+	tally.expect(button(dock, "first") == text("Install") && note(dock, "first") == text("Restart") && !first.enabled &&
+			     !shown(dock, "Test plugin") && dockSays(dock, text("Restart")),
+		     "uninstalling a running plugin: switched off, out of the list, Install, restart OBS to finish");
+	press(dock, "first");
+	tally.expect(button(dock, "first") == text("Uninstall") && note(dock, "first").isEmpty() && first.enabled &&
+			     shown(dock, "Test plugin") && hasGear(dock, "Test plugin") && !dockSays(dock, text("Restart")),
+		     "Install again: back on and in the list, nothing to finish");
+
+	// The order in the dropdown: the list's, then the others
+	QStringList order;
+	for (QAction *action : dropdown(dock)->actions())
+		if (auto *widget = qobject_cast<QWidgetAction *>(action); widget && widget->defaultWidget() &&
+									   widget->defaultWidget()->objectName().startsWith("plugin:"))
+			order << widget->defaultWidget()->objectName().mid(7);
+	tally.expect(order == QStringList({"fresh", "first", "second"}), "the dropdown in the list's order");
+	return tally.report("the dock", "steps as expected");
+}
+
+void saveDropdown(ManagerDock &dock, const QString &file)
+{
+	QMenu *menu = dropdown(dock);
+	if (!menu)
+		return;
+	menu->setAttribute(Qt::WA_DontShowOnScreen);
+	menu->popup(QPoint(0, 0));
+	waitFor([] { return false; }, 100);
+	test::report(menu->grab().save(file, "PNG"), "a picture of the dropdown in %s", file.toUtf8().constData());
+	menu->hide();
+}
+
 // ---- the picture ----------------------------------------------------------------------------------------------------
 
 void picture(const char *folder)
@@ -673,6 +1399,36 @@ void picture(const char *folder)
 	if (!folder || !*folder || !QDir().mkpath(QString::fromUtf8(folder)))
 		return;
 	StandIn twitch;
+	StandInGitHub github;
+	QTemporaryDir plugins;
+	const Layout layout{Layout::Kind::ObsFolder, plugins.path()};
+	const QByteArray zip = pluginZip("slinglive", "MZ");
+	github.answers["/slinglive.zip"] = {200, zip, {}};
+	QJsonArray list;
+	const struct {
+		const char *id, *name, *description;
+	} shownPlugins[] = {
+		{"first", "Test plugin", "Only here for the self-test."},
+		{"slinglive", "SlingLive", "Replaces the Controls panel with buttons you press by flinging a head at them."},
+		{"second", "Another test plugin", "Switched off, and with no settings."},
+		{"sarxina-parametric-eq", "Sarxina Parametric EQ", "A parametric equalizer for audio sources."},
+		{"sarxina-noise-gate", "Sarxina Noise Gate", "A voice noise gate."},
+	};
+	for (const auto &plugin : shownPlugins) {
+		QJsonObject entry = listed(plugin.id, "1.0.0", github.url("slinglive.zip"), sha(zip));
+		entry["name"] = plugin.name;
+		entry["description"] = plugin.description;
+		if (QLatin1String(plugin.id) == "first")
+			entry["version"] = "1.1.0";
+		list.append(entry);
+	}
+	github.answers["/plugins.json"] = {200, listOf(list), {}};
+	Pretend loaded;
+	for (const char *id : {"first", "second", "sarxina-noise-gate"}) {
+		writeFile(layout.dll(id), "MZ");
+		loaded[id] = {Store::Loaded::State::Yes, layout.dll(id), "1.0.0"};
+	}
+
 	Heard first, second;
 	const sarxina_plugin_info one = testPlugin(first, "first", "Test plugin");
 	sarxina_plugin_info two = testPlugin(second, "second", "Another test plugin");
@@ -681,15 +1437,21 @@ void picture(const char *folder)
 	two.get_properties = nullptr;
 	two.description = "Switched off, and with no settings.";
 
-	Manager manager(Manager::Use::SelfTest, twitch.url());
-	ManagerDock dock(manager); // made first, as in OBS, where plugins register once the dock is there
+	Manager manager(Manager::Use::SelfTest, twitch.url(), setupFor(github, layout, &loaded, {}));
+	ManagerDock dock(manager);
 	manager.add(&one);
 	manager.add(&two);
-	manager.setEnabled(*manager.plugins()[0], true); // the second one is left not added
+	manager.start();
+	waitFor([&manager] { return manager.store().list() == Store::List::Ready; });
+	manager.store().install("slinglive");
+	waitFor([&manager] { return !manager.store().state("slinglive").busy; });
+	manager.store().uninstall("second"); // switched off: waiting for a restart
 	dock.setAttribute(Qt::WA_DontShowOnScreen);
 	dock.resize(380, 520);
 	dock.show();
-	dock.findChildren<QCheckBox *>().at(1)->setChecked(false); // the second plugin's description, unfolded
+	for (QCheckBox *title : dock.findChildren<QCheckBox *>())
+		if (title->property("class").toString() == "indicator-expand" && title->text() == "Test plugin")
+			title->setChecked(false); // its description, unfolded
 
 	manager.followTwitchAccount("sarxina");
 	QByteArray cap, nick, join;
@@ -699,13 +1461,14 @@ void picture(const char *folder)
 
 	const QString file = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock.png"));
 	test::report(dock.grab().save(file, "PNG"), "a picture of the dock in %s", file.toUtf8().constData());
+	saveDropdown(dock, QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dropdown.png")));
 	manager.followTwitchAccount("");
 
 	// What the gear shows: the settings the plugin describes, drawn by the manager.
 	QWidget settings;
 	settings.setAttribute(Qt::WA_DontShowOnScreen);
-	auto *layout = new QVBoxLayout(&settings);
-	layout->addWidget(new PropertiesForm(*manager.plugins()[0], &settings));
+	auto *layoutOfSettings = new QVBoxLayout(&settings);
+	layoutOfSettings->addWidget(new PropertiesForm(*manager.plugins()[0], &settings));
 	settings.resize(420, settings.sizeHint().height());
 	settings.show();
 	waitFor([] { return false; }, 200);
@@ -726,9 +1489,49 @@ void picture(const char *folder)
 	}
 	dock.resize(380, 720);
 	waitFor([] { return false; }, 200);
-	const QString many = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock-22-plugins.png"));
-	test::report(dock.grab().save(many, "PNG"), "a picture of the dock with 22 plugins in %s",
-		     many.toUtf8().constData());
+	const QString many = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock-25-plugins.png"));
+	test::report(dock.grab().save(many, "PNG"), "a picture of the dock with 25 plugins in %s", many.toUtf8().constData());
+	saveDropdown(dock, QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dropdown-25-plugins.png")));
+}
+
+// ---- GitHub itself, when asked ---------------------------------------------------------------------------------------
+
+// With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_ONLINE=1: a real download through GitHub, the way a plugin's zip comes, and
+// the raw file host the list comes from. The zip is a release that is out already, checked against its SHA-256.
+bool online()
+{
+	if (qEnvironmentVariableIntValue("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_ONLINE") == 0)
+		return true;
+	Tally tally;
+	Fetcher fetcher;
+	const Source github = Source::github();
+	struct Got {
+		bool done = false, ok = false;
+		QByteArray body;
+		QString problem;
+	};
+	const auto get = [&](const QString &url, qint64 limit) {
+		auto got = std::make_shared<Got>();
+		fetcher.get(github, url, limit, [got](bool ok, const QByteArray &body, const QString &problem) {
+			*got = {true, ok, body, problem};
+		});
+		waitFor([got] { return got->done; }, 60000);
+		return *got;
+	};
+	const Got zip = get(github.downloads + "plinkolive-v1.1.0/plinkolive-1.1.0-windows-x64.zip", kLargestZip);
+	tally.expect(zip.ok && sha(zip.body) == "ea503ae88612dc475706a342190533289f96fc5178ae8128699b084d227ee898",
+		     "a release zip from GitHub, redirects and all: " + zip.problem.toStdString());
+	std::vector<ZipFile> unpacked;
+	QString why;
+	tally.expect(readZip(zip.body, unpacked, why) && unpacked.size() >= 2 &&
+			     unpacked[0].name == "obs-plugins/64bit/plinkolive.dll",
+		     "and it unpacks: " + why.toStdString());
+	const Got readme = get("https://raw.githubusercontent.com/Sarxina/sarxina-obs-plugins/main/README.md", kLargestIndex);
+	tally.expect(readme.ok && readme.body.startsWith("# Sarxina OBS Plugins"),
+		     "a file from the host the list comes from: " + readme.problem.toStdString());
+	const Got list = get(github.index, kLargestIndex);
+	test::report(true, "the list on GitHub: %s", list.ok ? "there" : list.problem.toUtf8().constData());
+	return tally.report("GitHub", "steps as expected");
 }
 
 } // namespace
@@ -741,6 +1544,11 @@ bool runSelfTest(const char *picturesFolder)
 	passed &= routing();
 	passed &= twitchConnection();
 	passed &= vtubeStudio();
+	passed &= catalog();
+	passed &= zips();
+	passed &= installing();
+	passed &= theDock();
+	passed &= online();
 	picture(picturesFolder);
 	test::report(passed, "%s", passed ? "passed" : "FAILED");
 	return passed;
@@ -752,8 +1560,7 @@ void checkInObs(Manager &manager)
 {
 	std::string names;
 	for (const auto &plugin : manager.plugins())
-		names += (names.empty() ? "" : ", ") + std::string(plugin->info->name) +
-			 (plugin->enabled ? " (added)" : " (not added)");
+		names += (names.empty() ? "" : ", ") + std::string(plugin->info->name) + (plugin->enabled ? " (on)" : " (off)");
 	test::report(!names.empty(), "registered through OBS: %s", names.empty() ? "nothing" : names.c_str());
 
 	static const sarxina_vts_request request{
@@ -787,3 +1594,65 @@ void checkInObs(Manager &manager)
 	});
 }
 
+// Inside OBS, with SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS=<button>:<plugin> ("Install:slinglive",
+// "Uninstall:slinglive", "Update:plinkolive"), or "-" to press nothing: once the list is there, says in the log what
+// the dock shows for every plugin, presses that button in the dock the way a click does, and once it has settled says
+// again what the dock shows. With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES, it paints the dock and the dropdown.
+void pressInObs(ManagerDock &dock, Manager &manager, const QString &pressing, const QString &pictures)
+{
+	const QString which = pressing.section(':', 0, 0), id = pressing.section(':', 1);
+	const auto describe = [&dock, &manager](const char *when) {
+		for (QAction *action : dropdown(dock) ? dropdown(dock)->actions() : QList<QAction *>()) {
+			auto *widget = qobject_cast<QWidgetAction *>(action);
+			if (!widget || !widget->defaultWidget() || !widget->defaultWidget()->objectName().startsWith("plugin:"))
+				continue;
+			const QString plugin = widget->defaultWidget()->objectName().mid(7);
+			const QString update = button(dock, plugin, "update");
+			test::report(true, "in OBS, %s: %s: [%s]%s%s%s", when, plugin.toUtf8().constData(),
+				     button(dock, plugin).toUtf8().constData(),
+				     update == "(hidden)" ? "" : (" [" + update + "]").toUtf8().constData(),
+				     note(dock, plugin).isEmpty() ? "" : (" " + note(dock, plugin)).toUtf8().constData(),
+				     manager.store().running(plugin) ? ", running" : "");
+		}
+		test::report(true, "in OBS, %s: the dock says \"%s\"", when,
+			     dockSays(dock, text("Restart")) ? "Restart OBS to finish." : "nothing to finish");
+	};
+	const auto paint = [&dock, pictures](const char *name) {
+		if (pictures.isEmpty() || !QDir().mkpath(pictures))
+			return;
+		const QString file = QDir(pictures).filePath(QStringLiteral("in-obs-%1.png").arg(QLatin1String(name)));
+		test::report(dock.grab().save(file, "PNG"), "a picture of the dock in %s", file.toUtf8().constData());
+		saveDropdown(dock, QDir(pictures).filePath(QStringLiteral("in-obs-%1-dropdown.png").arg(QLatin1String(name))));
+	};
+
+	auto *timer = new QTimer(&dock);
+	auto *step = new int(0);
+	QObject::connect(timer, &QTimer::timeout, &dock, [=, &dock, &manager] {
+		if (*step == 0) {
+			if (manager.store().list() == Store::List::Waiting)
+				return;
+			describe("before");
+			paint("before");
+			if (which == "-" || id.isEmpty()) {
+				timer->stop();
+				return;
+			}
+			const QString wanted = text(which == "Update" ? "Update" : which == "Uninstall" ? "Uninstall" : "Install");
+			const char *kind = which == "Update" ? "update" : "install";
+			const QString showing = button(dock, id, kind);
+			const bool right = which == "Update" ? showing.startsWith(wanted.section(' ', 0, 0)) : showing == wanted;
+			test::report(right, "in OBS: pressing %s on %s (the button says %s)", which.toUtf8().constData(),
+				     id.toUtf8().constData(), showing.toUtf8().constData());
+			if (right)
+				press(dock, id, kind);
+			*step = 1;
+		} else if (!manager.store().state(id).busy) {
+			describe("after");
+			paint("after");
+			timer->stop();
+			delete step;
+			timer->deleteLater();
+		}
+	});
+	timer->start(250);
+}

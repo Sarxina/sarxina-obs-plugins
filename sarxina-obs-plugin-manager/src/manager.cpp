@@ -18,10 +18,17 @@ constexpr const char *kLog = "[Sarxina OBS Plugin Manager]";
 
 } // namespace
 
-Manager::Manager(Use use, const QString &twitchServer) : use_(use), twitch_(twitchServer)
+Manager::Manager(Use use, const QString &twitchServer, Store::Setup store)
+	: use_(use),
+	  store_(std::move(store)),
+	  twitch_(twitchServer)
 {
 	clock_.start();
 	load();
+	connect(&store_, &Store::switchPlugin, this, [this](const QString &id, bool on) {
+		if (Plugin *plugin = this->plugin(id))
+			setEnabled(*plugin, on);
+	});
 	connect(&twitch_, &TwitchChat::message, this, &Manager::route);
 	connect(&vts_, &VTubeStudio::tokenChanged, this, [this](const QString &token) {
 		vtsToken_ = token;
@@ -49,18 +56,26 @@ bool Manager::add(const sarxina_plugin_info *info)
 
 	plugins_.push_back(std::make_unique<Plugin>(Plugin{info}));
 	Plugin &plugin = *plugins_.back();
-	const auto remembered = enabled_.find(info->id);
-	plugin.enabled = remembered != enabled_.end() && remembered->second;
+	plugin.enabled = store_.state(QString::fromUtf8(info->id)).change != Store::Change::Uninstalled;
 
 	std::vector<std::string> problems;
 	router_.add(plugin, problems);
 	for (const std::string &problem : problems)
 		blog(LOG_WARNING, "%s %s: chat command left out: %s", kLog, info->name, problem.c_str());
 
-	blog(LOG_INFO, "%s %s registered: %s", kLog, info->name, plugin.enabled ? "added" : "not added");
+	blog(LOG_INFO, "%s %s registered", kLog, info->name);
 	info->set_enabled(info->data, plugin.enabled);
 	emit pluginRegistered(&plugin);
 	return true;
+}
+
+Plugin *Manager::plugin(const QString &id) const
+{
+	const QByteArray name = id.toUtf8();
+	for (const auto &plugin : plugins_)
+		if (name == plugin->info->id)
+			return plugin.get();
+	return nullptr;
 }
 
 void Manager::setEnabled(Plugin &plugin, bool enabled)
@@ -68,9 +83,7 @@ void Manager::setEnabled(Plugin &plugin, bool enabled)
 	if (closed_ || plugin.enabled == enabled)
 		return;
 	plugin.enabled = enabled;
-	enabled_[plugin.info->id] = enabled;
-	save();
-	blog(LOG_INFO, "%s %s %s", kLog, plugin.info->name, enabled ? "added" : "removed");
+	blog(LOG_INFO, "%s %s switched %s", kLog, plugin.info->name, enabled ? "on" : "off");
 	plugin.info->set_enabled(plugin.info->data, enabled);
 	emit pluginChanged(&plugin);
 }
@@ -157,6 +170,7 @@ void Manager::vtsRequest(const sarxina_vts_request &request)
 
 void Manager::start()
 {
+	store_.start();
 	if (vtsOn_ && !vtsToken_.isEmpty()) // never asks VTube Studio for a new token on its own
 		vts_.connectTo(vtsPort_, vtsToken_, false);
 }
@@ -164,6 +178,7 @@ void Manager::start()
 void Manager::shutDown()
 {
 	closed_ = true;
+	store_.shutDown();
 	twitch_.leave();
 	vts_.disconnect();
 }
@@ -183,10 +198,6 @@ void Manager::load()
 	vtsPort_ = static_cast<int>(obs_data_get_int(config, "vts_port"));
 	vtsOn_ = obs_data_get_bool(config, "vts_on");
 	vtsToken_ = QString::fromUtf8(obs_data_get_string(config, "vts_token"));
-
-	OBSDataAutoRelease plugins = obs_data_get_obj(config, "plugins");
-	for (obs_data_item_t *item = plugins ? obs_data_first(plugins) : nullptr; item; obs_data_item_next(&item))
-		enabled_[obs_data_item_get_name(item)] = obs_data_item_get_bool(item);
 }
 
 void Manager::save() const
@@ -199,11 +210,7 @@ void Manager::save() const
 		return;
 	os_mkdirs(folder);
 
-	OBSDataAutoRelease plugins = obs_data_create();
-	for (const auto &[id, enabled] : enabled_)
-		obs_data_set_bool(plugins, id.c_str(), enabled);
 	OBSDataAutoRelease config = obs_data_create();
-	obs_data_set_obj(config, "plugins", plugins);
 	obs_data_set_int(config, "vts_port", vtsPort_);
 	obs_data_set_bool(config, "vts_on", vtsOn_);
 	obs_data_set_string(config, "vts_token", vtsToken_.toUtf8().constData());
