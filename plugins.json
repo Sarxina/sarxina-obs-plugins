@@ -1,0 +1,53 @@
+{
+  "plugins" : 
+  [
+    {
+      "description" : "Replaces the Controls panel with buttons you press by flinging a head at them from a slingshot.",
+      "id" : "slinglive",
+      "name" : "SlingLive",
+      "sha256" : "ab4b908477efcfc09db8c55668b94891acd95b20177782a974383b0e1f30e0b0",
+      "url" : "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/slinglive-v1.3.0/slinglive-1.3.0-windows-x64.zip",
+      "version" : "1.3.0"
+    },
+    {
+      "description" : "Replaces the Controls panel with buttons you press by dropping a head down a Plinko board.",
+      "id" : "plinkolive",
+      "name" : "PlinkoLive",
+      "sha256" : "d7850d87fc73160a864ea2e24c627d9981b1775c81a330b1fb932da78e9c7156",
+      "url" : "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/plinkolive-v1.2.0/plinkolive-1.2.0-windows-x64.zip",
+      "version" : "1.2.0"
+    },
+    {
+      "description" : "A Plinko board for a scene. Chat drops a ball, and the VTube Studio toggle it lands on is switched.",
+      "id" : "plinkotoggle",
+      "name" : "PlinkoToggle",
+      "sha256" : "6015c942f4c21392ff9abcffd6540b6706dad9f21a885832125c2477e906c805",
+      "url" : "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/plinkotoggle-v1.0.0/plinkotoggle-1.0.0-windows-x64.zip",
+      "version" : "1.0.0"
+    },
+    {
+      "description" : "A parametric equalizer for audio sources, laid out like Adobe Audition's, with a curve you can drag.",
+      "id" : "sarxina-parametric-eq",
+      "name" : "Sarxina Parametric EQ",
+      "sha256" : "5108e31fdf8d1cc1e7e9aaeb1d64b034cf0508f77f340ef1146c42196911d1a1",
+      "url" : "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/sarxina-parametric-eq-v1.0.0/sarxina-parametric-eq-1.0.0-windows-x64.zip",
+      "version" : "1.0.0"
+    },
+    {
+      "description" : "A voice noise gate: the voice passes untouched, the room under it is turned far down, without cutting words or breaths.",
+      "id" : "sarxina-noise-gate",
+      "name" : "Sarxina Noise Gate",
+      "sha256" : "2526fa8fa77c870f0b2db8478ebb05cc1132977ab610fe6cba335ce2a78daebc",
+      "url" : "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/sarxina-noise-gate-v1.0.0/sarxina-noise-gate-1.0.0-windows-x64.zip",
+      "version" : "1.0.0"
+    },
+    {
+      "description" : "A look-ahead limiter like Adobe Audition's Hard Limiter: no sample ever goes over the maximum amplitude.",
+      "id" : "sarxina-hard-limiter",
+      "name" : "Sarxina Hard Limiter",
+      "sha256" : "1188ff1f8455f40a8e53ebb4ca7f486e7206e7b6be9049ebabe0236a754aee02",
+      "url" : "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/sarxina-hard-limiter-v1.0.0/sarxina-hard-limiter-1.0.0-windows-x64.zip",
+      "version" : "1.0.0"
+    }
+  ]
+}

@@ -7,7 +7,7 @@
  * manager is not installed, sarxina_obs_plugin_manager_register() returns false and the plugin switches itself on and
  * runs on its own, as if the manager did not exist.
  *
- * The manager owns what plugins share: whether each one is added to OBS, its settings (drawn from what the plugin
+ * The manager owns what plugins share: which ones are installed, their settings (drawn from what the plugin
  * says about them here, so the manager needs to know nothing about any plugin), one chat connection that hands plugins
  * the chat they asked for, and one connection to VTube Studio. BUILDING.md has the steps for a new plugin, and
  * examples/example-plugin is the smallest one.
@@ -90,8 +90,9 @@ struct sarxina_plugin_info {
 	const char *description; /* one sentence */
 	void *data;              /* handed back to every callback */
 
-	/* Off means the plugin acts as if it were not installed. Called once while the plugin registers: off until the
-	 * streamer adds it in the manager's dock. */
+	/* Off means the plugin acts as if it were not installed. Called with true while the plugin registers, with false
+	 * if the streamer uninstalls it while OBS runs (OBS no longer loads it once it restarts), and with true again if
+	 * they take that back before the restart. */
 	void (*set_enabled)(void *data, bool enabled);
 
 	/* Optional: the plugin's settings, described with OBS's own properties and kept by the plugin. The manager draws

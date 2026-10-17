@@ -30,13 +30,16 @@ A look-ahead limiter like Adobe Audition's Hard Limiter: input boost, maximum am
 
 The hub the other Sarxina plugins plug into. It's one dock where you pick which plugins you want and change their settings behind each one's gear, and it handles the shared stuff for them: one VTube Studio connection, and chat from the Twitch account OBS is logged into (Settings > Stream > Connect Account), passed to whichever plugin wants it. Not to be confused with OBS's own Plugin Manager under Tools; this one is just for Sarxina plugins.
 
-To get it, close OBS, extract the manager's zip from [Releases](../../releases) into your OBS folder (usually `C:\Program Files\obs-studio`), open OBS and tick it under **Docks**. The Sarxina plugins you have show up under **Choose plugins**: check the ones you want.
+To get it, close OBS, extract the manager's zip from [Releases](../../releases) into your OBS folder (usually `C:\Program Files\obs-studio`), open OBS and tick it under **Docks**. Then open **Choose plugins**, hit **Install** on the ones you want and restart OBS. **Uninstall** takes one out again (that needs a restart too). Plugins it installs go into `C:\ProgramData\obs-studio\plugins`, so no admin rights needed.
 
 ## Install
 
 Needs OBS Studio 32.2 or newer on Windows.
 
+The easy way is the Sarxina OBS Plugin Manager above. To install a plugin by hand instead:
+
 1. Close OBS.
 2. Download the plugin's zip from [Releases](../../releases).
 3. Extract it into your OBS Studio folder, usually `C:\Program Files\obs-studio`.
-4. Open OBS and tick the plugin under **Docks**. With the Sarxina OBS Plugin Manager installed, check the plugin under **Choose plugins** in the manager first. PlinkoToggle is a source instead: in **Sources**, press **+** and pick PlinkoToggle. Sarxina Parametric EQ, Sarxina Noise Gate and Sarxina Hard Limiter are filters: right-click an audio source, **Filters**, then **+**.
+
+Either way, the docks (SlingLive, PlinkoLive) are under **Docks**. PlinkoToggle is a source: in **Sources**, press **+** and pick PlinkoToggle. Sarxina Parametric EQ, Sarxina Noise Gate and Sarxina Hard Limiter are filters: right-click an audio source, **Filters**, then **+**.

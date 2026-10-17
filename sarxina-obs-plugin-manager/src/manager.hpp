@@ -1,12 +1,14 @@
-// The Sarxina OBS Plugin Manager without its dock: the plugins that handed themselves to it and whether each is added
-// to OBS, the chat connection and the VTube Studio connection they share, and what it remembers between sessions (in
-// its config.json). A plugin it has not seen before stays off until the streamer adds it.
+// The Sarxina OBS Plugin Manager without its dock: the plugins that handed themselves to it, the store that installs
+// and uninstalls plugins (store.hpp), the chat connection and the VTube Studio connection the plugins share, and what
+// it remembers between sessions (in its config.json). A plugin that is installed runs; one uninstalled while OBS runs
+// is switched off at once.
 //
 // The chat is the chat of the Twitch account OBS itself is connected to (Settings > Stream), read without logging in.
 #pragma once
 
 #include "chat-router.hpp"
 #include "plugin.hpp"
+#include "store.hpp"
 #include "twitch-chat.hpp"
 #include "vtube-studio.hpp"
 
@@ -27,9 +29,10 @@ class Manager : public QObject {
 public:
 	enum class Use {
 		Obs,      // the real one: remembers things in its config.json
-		SelfTest, // reads and writes no files
+		SelfTest, // reads and writes no config.json
 	};
-	explicit Manager(Use use = Use::Obs, const QString &twitchServer = TwitchChat::kServer);
+	explicit Manager(Use use = Use::Obs, const QString &twitchServer = TwitchChat::kServer,
+			 Store::Setup store = Store::Setup());
 
 	// What plugins call (sarxina-obs-plugin-manager.h).
 	bool add(const sarxina_plugin_info *info);
@@ -37,7 +40,10 @@ public:
 	void vtsRequest(const sarxina_vts_request &request);
 
 	const std::vector<std::unique_ptr<Plugin>> &plugins() const { return plugins_; }
+	Plugin *plugin(const QString &id) const;
 	void setEnabled(Plugin &plugin, bool enabled);
+
+	Store &store() { return store_; }
 
 	TwitchChat &twitch() { return twitch_; }
 	// Reads this account's chat, or none if it is empty.
@@ -48,14 +54,15 @@ public:
 	void connectVts(int port); // may make VTube Studio ask the streamer to allow the manager
 	void disconnectVts();
 
-	// Connects VTube Studio again if it was connected when OBS last closed.
+	// OBS has finished loading: fetches the list of plugins, and connects VTube Studio again if it was connected when
+	// OBS last closed.
 	void start();
 	// OBS is closing: the connections close, and nothing more reaches any plugin.
 	void shutDown();
 
 signals:
 	void pluginRegistered(sarxina::Plugin *plugin);
-	void pluginChanged(sarxina::Plugin *plugin); // added or removed, or its settings changed
+	void pluginChanged(sarxina::Plugin *plugin); // switched on or off, or its settings changed
 
 private:
 	void route(const ChatMessage &message);
@@ -63,6 +70,7 @@ private:
 	void save() const;
 
 	Use use_;
+	Store store_;
 	std::vector<std::unique_ptr<Plugin>> plugins_;
 	ChatRouter router_;
 	TwitchChat twitch_;
@@ -71,7 +79,6 @@ private:
 	bool closed_ = false;
 
 	// Remembered between sessions
-	std::map<std::string, bool> enabled_;
 	int vtsPort_ = 8001;
 	bool vtsOn_ = false;
 	QString vtsToken_;
