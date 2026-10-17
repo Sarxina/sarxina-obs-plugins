@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <string>
 
 namespace sarxina::plinkotoggle {
 
@@ -69,6 +70,7 @@ private:
 
 	Drops drops_;
 	Model model_;
+	std::string problem_; // the last reason VTube Studio gave no hotkeys
 	bool managed_ = false; // the manager runs it
 	bool enabled_ = false;
 	bool asking_ = false;

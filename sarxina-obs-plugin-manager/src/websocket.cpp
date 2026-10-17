@@ -33,7 +33,36 @@ struct WebSocket::Attempt {
 	unsigned generation;
 };
 
-WebSocket::WebSocket(QObject *parent) : QObject(parent), thread_([this] { run(); }) {}
+WebSocket::WebSocket(Whole whole, QObject *parent) : QObject(parent), whole_(whole), thread_([this] { run(); }) {}
+
+bool WebSocket::wholeJson(const std::string &message)
+{
+	int depth = 0;
+	bool opened = false, inString = false, escaped = false;
+	for (const char c : message) {
+		if (inString) {
+			if (escaped)
+				escaped = false;
+			else if (c == '\\')
+				escaped = true;
+			else if (c == '"')
+				inString = false;
+		} else if (c == '"') {
+			inString = true;
+		} else if (c == '{' || c == '[') {
+			depth++;
+			opened = true;
+		} else if (c == '}' || c == ']') {
+			depth--;
+		}
+	}
+	return opened && depth <= 0;
+}
+
+bool WebSocket::wholeFrame(const std::string &)
+{
+	return true;
+}
 
 WebSocket::~WebSocket()
 {
@@ -205,12 +234,14 @@ void WebSocket::read(void *handle, unsigned generation)
 				break;
 			if (result != CURLE_OK || !frame || (frame->flags & CURLWS_CLOSE))
 				return;
-			if (!(frame->flags & (CURLWS_TEXT | CURLWS_BINARY)))
+			if (!(frame->flags & (CURLWS_TEXT | CURLWS_BINARY | CURLWS_CONT)))
 				continue; // a ping, which curl answers itself
+			// A frame of a message, or a whole one. A message's later frames come as CURLWS_CONT, and its last one
+			// too, so only what has arrived says when it is whole.
 			message.append(buffer, got);
 			if (message.size() > kLargestMessage)
 				return;
-			if (frame->bytesleft == 0 && !(frame->flags & CURLWS_CONT)) {
+			if (frame->bytesleft == 0 && whole_(message)) {
 				post(generation, [this, text = QByteArray::fromStdString(message)] { emit received(text); });
 				message.clear();
 			}

@@ -262,6 +262,11 @@ void PlinkoToggle::answered(bool ok, const char *json)
 	asking_ = false;
 	if (closed_ || !enabled_)
 		return;
+	// Every new reason VTube Studio gives no hotkeys goes in the log once.
+	const std::string problem = ok ? std::string() : std::string(json ? json : "");
+	if (!problem.empty() && problem != problem_)
+		blog(LOG_INFO, "[%s] VTube Studio: no hotkeys (%s)", PLUGIN_TITLE, problem.c_str());
+	problem_ = problem;
 	Model model = readHotkeys(ok, json);
 	if (model == model_)
 		return;
@@ -270,8 +275,6 @@ void PlinkoToggle::answered(bool ok, const char *json)
 		     model.toggles.size());
 	else if (model.state == Model::State::NoModel)
 		blog(LOG_INFO, "[%s] VTube Studio: no model loaded", PLUGIN_TITLE);
-	else
-		blog(LOG_INFO, "[%s] VTube Studio: not connected (%s)", PLUGIN_TITLE, json ? json : "");
 	model_ = std::move(model);
 	refresh();
 }

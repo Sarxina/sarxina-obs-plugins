@@ -71,7 +71,7 @@ Each plugin has a check that needs no screen. Nothing in OBS is started or stopp
 - **SlingLive** plays three scripted flings in practice mode, each with the bobbing buttons at 57 different points, and reports which buttons each one pressed.
 - **PlinkoLive** drops the head from the top 2000 times, each with the random nudges at the pegs seeded differently, and reports what share of the drops pressed each button (every button has to get at least 1 in 100), that the same drops press the same buttons on two taller panels, and that practice mode never reached OBS.
 - **PlinkoToggle** lays out boards for 1 to 40 toggles and checks that each grows with its toggles and that its bottom row of pegs reaches into both end slots. It drops 500 balls on each and checks that every one comes down in one slot, and that a ball falls the same way with another one falling beside it. It plays chat at it: the command, other text, the cooldown, redeems of the reward and of others, redeems waiting their turn, the rewards it offers in its settings, and chatters' names with characters that turn text around or hide in it. It reads answers of VTube Studio into toggles, and says how long a frame takes.
-- **Sarxina OBS Plugin Manager** reads lines of Twitch's chat protocol and the Twitch account from OBS profiles, puts messages that should be dropped through the checks, and routes commands from different chatters and roles at different times to a plugin that exists only in the test. Then it goes the whole way over real websockets to stand-ins for Twitch and VTube Studio on the same computer: logging in to chat anonymously, a command reaching the plugin, reconnecting; and with VTube Studio, asking for permission once, logging in with the remembered token, never asking again on its own, and a plugin's request with its answer.
+- **Sarxina OBS Plugin Manager** reads lines of Twitch's chat protocol and the Twitch account from OBS profiles, puts messages that should be dropped through the checks, and routes commands from different chatters and roles at different times to a plugin that exists only in the test. Then it goes the whole way over real websockets to stand-ins for Twitch and VTube Studio on the same computer: logging in to chat anonymously, a command reaching the plugin, reconnecting; and with VTube Studio, asking for permission once, logging in with the remembered token, never asking again on its own, and a plugin's request with its answer, also a long one split into many frames the way VTube Studio sends it.
 
 - **Sarxina Parametric EQ** checks each kind of band against the textbook (a band's gain at its centre and half of it at its edges, a shelf's half gain at its corner, a pass filter's -3 dB at its cutoff and its fall an octave out, for every slope), runs an impulse through the filter as OBS would and measures it against the drawn curve at 400 frequencies, and takes the settings through OBS's settings data and back. With a folder it also paints the editor and writes `response.csv`.
 
@@ -98,7 +98,7 @@ A passing run looks like this:
 [Sarxina OBS Plugin Manager] self-test: checks: 17 of 17 messages handled as expected: OK
 [Sarxina OBS Plugin Manager] self-test: routing: 28 of 28 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: Twitch connection: 13 of 13 steps as expected: OK
-[Sarxina OBS Plugin Manager] self-test: VTube Studio: 15 of 15 steps as expected: OK
+[Sarxina OBS Plugin Manager] self-test: VTube Studio: 17 of 17 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: passed
 ```
 

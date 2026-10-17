@@ -2,6 +2,9 @@
 // on a thread of its own so that OBS never waits on the network, and hands what arrives to the UI thread one message
 // at a time. When a connection drops or cannot be made it tries again by itself, after 1, 2, 4 and then every
 // 8 seconds. Made with libcurl, which OBS ships.
+//
+// A server may split a message into several frames. The libcurl that OBS 32.2 ships (8.12.1) does not say which frame
+// is a message's last, so the owner says when what has arrived is a whole message.
 #pragma once
 
 #include <QByteArray>
@@ -20,7 +23,12 @@ class WebSocket : public QObject {
 	Q_OBJECT
 
 public:
-	explicit WebSocket(QObject *parent = nullptr);
+	// Whether what has arrived so far is a whole message.
+	using Whole = bool (*)(const std::string &message);
+	static bool wholeJson(const std::string &message);  // a JSON object or array, closed
+	static bool wholeFrame(const std::string &message); // whatever a frame brought: Twitch never splits its lines
+
+	explicit WebSocket(Whole whole, QObject *parent = nullptr);
 	~WebSocket() override;
 
 	// Connects to a ws:// or wss:// address, after closing any connection there was.
@@ -45,6 +53,8 @@ private:
 	bool wanted(unsigned generation);
 	bool take(unsigned generation, std::string &text);
 	template<typename Call> void post(unsigned generation, Call call);
+
+	const Whole whole_; // before the thread, which uses it
 
 	// Shared with the thread, under mutex_. Every open() and close() starts a new generation; anything the thread is
 	// still doing for an older one is dropped.

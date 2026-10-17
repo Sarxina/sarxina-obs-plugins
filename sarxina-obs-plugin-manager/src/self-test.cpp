@@ -118,31 +118,40 @@ public:
 		return true;
 	}
 
-	void send(const QByteArray &text)
+	// A whole text message in one frame, or, given a size, split into frames of that size, the way VTube Studio sends
+	// a long one.
+	void send(const QByteArray &text, qsizetype pieces = 0)
 	{
-		QByteArray frame(1, static_cast<char>(0x81)); // FIN and text: a whole text message
-		if (text.size() < 126) {
-			frame += char(text.size());
-		} else {
-			frame += char(126);
-			frame += char((text.size() >> 8) & 0xFF);
-			frame += char(text.size() & 0xFF);
-		}
-		frame += text;
-		if (client_) {
-			client_->write(frame);
-			client_->flush();
+		const qsizetype size = pieces > 0 ? pieces : std::max<qsizetype>(text.size(), 1);
+		for (qsizetype at = 0; at < text.size() || at == 0; at += size) {
+			const QByteArray piece = text.mid(at, size);
+			const bool first = at == 0, last = at + size >= text.size();
+			// FIN on the last frame; text on the first, continuation on the rest
+			QByteArray frame(1, static_cast<char>((last ? 0x80 : 0x00) | (first ? 0x01 : 0x00)));
+			if (piece.size() < 126) {
+				frame += char(piece.size());
+			} else {
+				frame += char(126);
+				frame += char((piece.size() >> 8) & 0xFF);
+				frame += char(piece.size() & 0xFF);
+			}
+			frame += piece;
+			if (client_) {
+				client_->write(frame);
+				client_->flush();
+			}
 		}
 	}
 	// VTube Studio's answer to a request.
-	void answer(const QJsonObject &request, const char *type, const QJsonObject &data)
+	void answer(const QJsonObject &request, const char *type, const QJsonObject &data, qsizetype pieces = 0)
 	{
 		send(QJsonDocument(QJsonObject{{"apiName", "VTubeStudioPublicAPI"},
 					       {"apiVersion", "1.0"},
 					       {"requestID", request.value("requestID")},
 					       {"messageType", type},
 					       {"data", data}})
-			     .toJson(QJsonDocument::Compact));
+			     .toJson(QJsonDocument::Compact),
+		     pieces);
 	}
 	void drop()
 	{
@@ -642,6 +651,20 @@ bool vtubeStudio()
 	tally.expect(waitFor([&] { return answer.calls == 1; }) && answer.ok &&
 			     answer.data.value("availableHotkeys").toArray().size() == 1,
 		     "its answer reaching the plugin");
+
+	// A long answer, split into frames of 1016 bytes as VTube Studio sends it, with braces inside its strings.
+	Answer longAnswer;
+	const sarxina_vts_request again{"HotkeysInCurrentModelRequest", nullptr, answered, &longAnswer};
+	manager.vtsRequest(again);
+	QJsonArray many;
+	for (int i = 0; i < 60; i++)
+		many.append(QJsonObject{{"name", QStringLiteral("Hotkey {%1] \"x\"").arg(i)}, {"hotkeyID", QString::number(i)}});
+	tally.expect(vts.nextJson(request) && type() == "HotkeysInCurrentModelRequest" && !request.contains("data"),
+		     "a request without data");
+	vts.answer(request, "HotkeysInCurrentModelResponse", {{"modelLoaded", true}, {"availableHotkeys", many}}, 1016);
+	tally.expect(waitFor([&] { return longAnswer.calls == 1; }) && longAnswer.ok &&
+			     longAnswer.data.value("availableHotkeys").toArray().size() == 60,
+		     "a long answer in many frames reaching the plugin whole");
 
 	Answer refused;
 	const sarxina_vts_request trigger{"HotkeyTriggerRequest", "{\"hotkeyID\":\"nope\"}", answered, &refused};

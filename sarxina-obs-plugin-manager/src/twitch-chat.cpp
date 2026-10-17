@@ -183,7 +183,10 @@ const char *name(TwitchChat::State state)
 
 } // namespace
 
-TwitchChat::TwitchChat(QString server, QObject *parent) : QObject(parent), server_(std::move(server))
+TwitchChat::TwitchChat(QString server, QObject *parent)
+	: QObject(parent),
+	  socket_(WebSocket::wholeFrame),
+	  server_(std::move(server))
 {
 	connect(&socket_, &WebSocket::opened, this, &TwitchChat::opened);
 	connect(&socket_, &WebSocket::received, this, &TwitchChat::received);
