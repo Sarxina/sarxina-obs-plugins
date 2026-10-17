@@ -10,6 +10,9 @@ SlingLive and PlinkoLive are docks that stand in for OBS's Controls panel. Every
 - `shared\src\game.hpp` is what a plugin brings: where the buttons stand, how the head moves and what it hits, what it draws, and how short its panel can be. A dock wider than that shows the whole panel in its middle.
 - `shared\src\controls-dock`, `panel-painter` and `obs-bridge` are the dock in OBS, how it looks, and the link to OBS.
 - `slinglive\src\slingshot` and `plinkolive\src\plinko-board` are the two games.
+- `shared\src\plinko` is the Plinko board itself, which PlinkoLive and PlinkoToggle both drop things down: a triangle of pegs over a row of slots, and how a ball falls through them. `plinko-painter` draws its pegs and dividers.
+
+PlinkoToggle, in `plinkotoggle\`, is a source rather than a dock: a Plinko board in a scene, built on `shared\src\plinko` without the shared dock code. `toggle-board` is the board with a slot for each VTube Studio toggle, the balls, and its pictures; `board-source` is the source in OBS; `vts-toggles` reads VTube Studio's hotkeys; `drops` decides when chat drops a ball (the command, the redeem, the cooldown); `plinkotoggle` is the plugin as the Sarxina OBS Plugin Manager runs it: its settings, chat, and VTube Studio.
 
 Sarxina Parametric EQ, in `sarxina-parametric-eq\`, is an audio filter rather than a dock and uses none of the shared dock code: `eq-design` is the equalizer (Audition's band layout as biquad sections, and the processor that runs them), `eq-settings` its settings as OBS keeps them, `curve-editor` the window with the curve, and `plugin-main` the filter in OBS. Sarxina Noise Gate (`sarxina-noise-gate\`) and Sarxina Hard Limiter (`sarxina-hard-limiter\`) are audio filters built the same way: `gate` and `limiter` are the processors, the `-settings` files their settings as OBS keeps them, `plugin-main` the filter.
 
@@ -39,15 +42,15 @@ $ctest = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7
 & $cmake --preset windows-x64
 & $cmake --build --preset windows-x64
 & $ctest --test-dir build_x64 -C RelWithDebInfo -V
-& $cmake --build --preset windows-x64 --target slinglive-package plinkolive-package sarxina-obs-plugin-manager-package sarxina-parametric-eq-package sarxina-noise-gate-package sarxina-hard-limiter-package
+& $cmake --build --preset windows-x64 --target slinglive-package plinkolive-package plinkotoggle-package sarxina-obs-plugin-manager-package sarxina-parametric-eq-package sarxina-noise-gate-package sarxina-hard-limiter-package
 ```
 
 What each one does:
 
 1. **Configure.** The first time, this downloads the three archives listed in `buildspec.json` into `.deps\`, checks each against its SHA-256, and builds `libobs` and `obs-frontend-api`. That takes a few minutes. Later runs skip all of it.
-2. **Build.** Produces `<plugin>.dll` in `build_x64\<plugin>\RelWithDebInfo\` for `slinglive`, `plinkolive`, `sarxina-obs-plugin-manager`, `sarxina-parametric-eq`, `sarxina-noise-gate` and `sarxina-hard-limiter`, and the example plugin in `build_x64\examples\example-plugin\RelWithDebInfo\`.
+2. **Build.** Produces `<plugin>.dll` in `build_x64\<plugin>\RelWithDebInfo\` for `slinglive`, `plinkolive`, `plinkotoggle`, `sarxina-obs-plugin-manager`, `sarxina-parametric-eq`, `sarxina-noise-gate` and `sarxina-hard-limiter`, and the example plugin in `build_x64\examples\example-plugin\RelWithDebInfo\`.
 3. **Check.** Runs each plugin's self-test, described below. It needs no OBS and no internet, and shows nothing on screen.
-4. **Package.** Produces `dist\<plugin>-<version>-windows-x64.zip` for each of the six, the files to attach to a release. `dist\` is not committed. The example plugin is never packaged.
+4. **Package.** Produces `dist\<plugin>-<version>-windows-x64.zip` for each of the seven, the files to attach to a release. `dist\` is not committed. The example plugin is never packaged.
 
 Versions used: Build Tools for Visual Studio 2022 17.13.6 (MSVC 19.43), CMake 3.30.5, Windows SDK 10.0.22621.0, OBS Studio 32.2.2 sources, obs-deps 2026-07-15, Qt 6.11.1.
 
@@ -59,7 +62,7 @@ Each zip is laid out like the OBS Studio folder, so extracting it into an OBS fo
 tar -xf dist\plinkolive-1.1.0-windows-x64.zip -C "C:\path\to\portable-obs"
 ```
 
-Then start that OBS and tick the plugin under **Docks**.
+Then start that OBS and tick the plugin under **Docks**, or for PlinkoToggle add it to a scene under **Sources**.
 
 ## The self-tests
 
@@ -67,6 +70,7 @@ Each plugin has a check that needs no screen. Nothing in OBS is started or stopp
 
 - **SlingLive** plays three scripted flings in practice mode, each with the bobbing buttons at 57 different points, and reports which buttons each one pressed.
 - **PlinkoLive** drops the head from the top 2000 times, each with the random nudges at the pegs seeded differently, and reports what share of the drops pressed each button (every button has to get at least 1 in 100), that the same drops press the same buttons on two taller panels, and that practice mode never reached OBS.
+- **PlinkoToggle** lays out boards for 1 to 40 toggles and checks that each grows with its toggles and that its bottom row of pegs reaches into both end slots. It drops 500 balls on each and checks that every one comes down in one slot, and that a ball falls the same way with another one falling beside it. It plays chat at it: the command, other text, the cooldown, redeems of the reward and of others, redeems waiting their turn, the rewards it offers in its settings, and chatters' names with characters that turn text around or hide in it. It reads answers of VTube Studio into toggles, and says how long a frame takes.
 - **Sarxina OBS Plugin Manager** reads lines of Twitch's chat protocol and the Twitch account from OBS profiles, puts messages that should be dropped through the checks, and routes commands from different chatters and roles at different times to a plugin that exists only in the test. Then it goes the whole way over real websockets to stand-ins for Twitch and VTube Studio on the same computer: logging in to chat anonymously, a command reaching the plugin, reconnecting; and with VTube Studio, asking for permission once, logging in with the remembered token, never asking again on its own, and a plugin's request with its answer.
 
 - **Sarxina Parametric EQ** checks each kind of band against the textbook (a band's gain at its centre and half of it at its edges, a shelf's half gain at its corner, a pass filter's -3 dB at its cutoff and its fall an octave out, for every slope), runs an impulse through the filter as OBS would and measures it against the drawn curve at 400 frequencies, and takes the settings through OBS's settings data and back. With a folder it also paints the editor and writes `response.csv`.
@@ -74,7 +78,7 @@ Each plugin has a check that needs no screen. Nothing in OBS is started or stopp
 - **Sarxina Noise Gate** checks that a word out of silence comes out whole from its first sample, that the noise floor comes out exactly the range down, the hysteresis between the open and close thresholds, and the hold, release and attack times, sample by sample.
 - **Sarxina Hard Limiter** puts 3 s of bursts up to 20 dB over the ceiling through it at several look-aheads, linked and not, and checks that no sample goes over it and that the look-ahead alone keeps it there; then that audio under the ceiling comes out unchanged, the input boost, the gain on a single peak, that it starts down one look-ahead early, the 12 dB per release time recovery, and linked channels.
 
-Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1`, `PLINKOLIVE_SELFTEST=1`, `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1`, `SARXINA_PARAMETRIC_EQ_SELFTEST=1`, `SARXINA_NOISE_GATE_SELFTEST=1` or `SARXINA_HARD_LIMITER_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (and likewise for the others) for the pictures. Inside OBS the manager's self-test also lists the plugins that registered through OBS and, once VTube Studio is connected, asks it which model is loaded, the way a plugin would. With `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE=<a profile's basic.ini>` it also says which Twitch account that profile is connected to, by name only.
+Without OBS, step 3 above runs them. With a folder as the second argument, `<plugin>-selftest` also paints the dock into PNG files there; `ctest` passes `build_x64\<plugin>-pictures`. Inside OBS, start OBS with the environment variable `SLINGLIVE_SELFTEST=1`, `PLINKOLIVE_SELFTEST=1`, `PLINKOTOGGLE_SELFTEST=1`, `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1`, `SARXINA_PARAMETRIC_EQ_SELFTEST=1`, `SARXINA_NOISE_GATE_SELFTEST=1` or `SARXINA_HARD_LIMITER_SELFTEST=1`; the results are written to the OBS log once OBS has finished loading. Add `SLINGLIVE_SELFTEST_PICTURES=<folder>` (and likewise for the others) for the pictures. Inside OBS the manager's self-test also lists the plugins that registered through OBS and, once VTube Studio is connected, asks it which model is loaded, the way a plugin would. With `SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE=<a profile's basic.ini>` it also says which Twitch account that profile is connected to, by name only. Inside OBS PlinkoToggle's self-test also says whether the manager runs it, whether a board is on screen, and the toggles of the model VTube Studio has loaded. With `PLINKOTOGGLE_SELFTEST_TOGGLE=<the name of an expression toggle>` it goes on to play chat at the board the way the manager hands it over: the command, then a redeem, then two redeems at once, each ball seeded to come down on that toggle. It reads the expression back from VTube Studio after every landing and switches it back, so it ends as it was.
 
 A passing run looks like this:
 
@@ -89,11 +93,11 @@ A passing run looks like this:
 [PlinkoLive] self-test: 640 x 1024 panel, the same 2000 drops -> 2000 pressed the same button as on the 640 x 430 panel (the slowest after 6.2 seconds): OK
 [PlinkoLive] self-test: practice mode -> 0 calls to OBS (real mode, with a stand-in for OBS: 1944 calls for 1944 presses): OK
 [PlinkoLive] self-test: passed (3 of 3 panels as expected, practice mode as expected)
-[Sarxina OBS Plugin Manager] self-test: Twitch: 17 of 17 lines read as expected: OK
+[Sarxina OBS Plugin Manager] self-test: Twitch: 18 of 18 lines read as expected: OK
 [Sarxina OBS Plugin Manager] self-test: Twitch account: 5 of 5 profiles read as expected: OK
-[Sarxina OBS Plugin Manager] self-test: checks: 16 of 16 messages handled as expected: OK
+[Sarxina OBS Plugin Manager] self-test: checks: 17 of 17 messages handled as expected: OK
 [Sarxina OBS Plugin Manager] self-test: routing: 28 of 28 steps as expected: OK
-[Sarxina OBS Plugin Manager] self-test: Twitch connection: 12 of 12 steps as expected: OK
+[Sarxina OBS Plugin Manager] self-test: Twitch connection: 13 of 13 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: VTube Studio: 15 of 15 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: passed
 ```
@@ -124,7 +128,7 @@ Any OBS plugin can be run by the manager, from this repository or not, without a
 1. Copy `shared\src\sarxina-obs-plugin-manager.h` into your plugin. It needs only libobs.
 2. Fill in a `sarxina_plugin_info`: an id (your module's name), the name and the one sentence shown in the manager's list, and `set_enabled`. The manager calls it with false until the streamer adds your plugin, then with true. Off, act as if you were not installed: no dock, nothing running.
 3. Settings, if you have any: `get_properties` describes them with OBS's own properties (`obs_properties_add_bool`, `_int`, `_float`, `_text` and `_list` are drawn), `get_settings` fills in the current values, and `update` gets every change. You keep and save them yourself. The manager draws them behind your plugin's gear.
-4. Chat, if you want it: `commands` lists chat commands, each with a name, other names, the lowest role that may use it and a cooldown, and its `run` hears only the ones that passed every check. `chat` gets every message that passed the checks. Either way the text is valid, has no control characters, and is at most 500 characters.
+4. Chat, if you want it: `commands` lists chat commands, each with a name, other names, the lowest role that may use it and a cooldown, and its `run` hears only the ones that passed every check. `chat` gets every message that passed the checks. Either way the text is valid, has no control characters, and is at most 500 characters. A message sent with a channel point reward has the reward's id in `reward_id`; Twitch shows only rewards that ask the viewer for text in chat.
 5. VTube Studio, if you want it: `sarxina_obs_plugin_manager_vts_request` sends any request of VTube Studio's public API over the manager's connection, and hands you the answer.
 6. From `obs_module_post_load`, call `sarxina_obs_plugin_manager_register(&info)`. If it returns false, the manager is not installed: switch yourself on.
 

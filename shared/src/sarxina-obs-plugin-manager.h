@@ -65,6 +65,9 @@ struct sarxina_chat_message {
 	const struct sarxina_emote *emotes;
 	size_t emote_count;
 	int64_t time_ms; /* when the platform got it, in milliseconds since 1970 UTC */
+	/* The id of the channel point reward the message was sent with, or "". Only a reward that asks the viewer for
+	 * text comes through chat, as the text they typed; Twitch gives its id, not its name. */
+	const char *reward_id;
 };
 
 /* A chat command a plugin answers to, typed in chat as "!name" or "!name what follows". The manager matches it in any

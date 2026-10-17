@@ -1,10 +1,12 @@
 // PlinkoLive's game. The head hangs at the top of the panel over the point of a triangle of pegs: one peg, then two,
 // then three, and so on down to the slots along the bottom. A click drops it, always from the same place. It bounces
 // left or right off each row and comes down in one of the slots, one slot for each button, and that button is pressed.
-// Start Streaming and Start Recording have the two middle slots, where the head lands most often.
+// Start Streaming and Start Recording have the two middle slots, where the head lands most often. The board itself is
+// the shared one (plinko.hpp).
 #pragma once
 
 #include "game.hpp"
+#include "plinko.hpp"
 
 #include <cstdint>
 #include <random>
@@ -32,14 +34,9 @@ public:
 	double toastTop() const override { return 2.0; } // the head hangs where toasts usually go
 
 private:
-	static Point peg(int row, int i);
 	double slotY() const; // the middle of the buttons
 
-	// Moves a falling head one step. True once it has come down in a slot.
-	bool fall(Head &head, double dt);
-	double random();
-
-	double ground_ = 0;
+	Plinko board_;
 	double still_ = 0; // seconds the falling head has hardly moved
 	std::mt19937 rng_;
 };

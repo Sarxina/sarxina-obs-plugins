@@ -12,10 +12,12 @@
 #                       obs-plugins/64bit/<name>.dll
 #                       data/obs-plugins/<name>/...
 #
-# sarxina_add_obs_plugin(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>)
+# sarxina_add_obs_plugin(<name> TITLE <title> VERSION <x.y.z> DESCRIPTION <text> SOURCES <files...>
+#                        [LIBRARIES <targets...>])
 #
-# One of the toys: the shared dock (shared/) with the plugin's own game in it. Its sources define makeGame() and
-# runSelfTest(), and the shared strings in shared/data/locale are added to its own.
+# One of the docks: the shared dock (shared/) with the plugin's own game in it. Its sources define makeGame() and
+# runSelfTest(), and the shared strings in shared/data/locale are added to its own. LIBRARIES are more of the shared
+# code, such as sarxina-plinko.
 
 include_guard(GLOBAL)
 
@@ -113,7 +115,7 @@ function(sarxina_add_obs_module name)
 endfunction()
 
 function(sarxina_add_obs_plugin name)
-  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES")
+  cmake_parse_arguments(PARSE_ARGV 1 _plugin "" "TITLE;VERSION;DESCRIPTION" "SOURCES;LIBRARIES")
   sarxina_add_obs_module(
     ${name}
     TITLE "${_plugin_TITLE}"
@@ -122,6 +124,6 @@ function(sarxina_add_obs_plugin name)
     SOURCES ${_plugin_SOURCES}
     MODULE_SOURCES "${SARXINA_SHARED_DIR}/src/plugin-main.cpp"
     LOCALES "${SARXINA_SHARED_DIR}/data/locale"
-    LIBRARIES sarxina-shared
+    LIBRARIES sarxina-shared ${_plugin_LIBRARIES}
   )
 endfunction()

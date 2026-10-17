@@ -305,6 +305,7 @@ bool TwitchChat::parse(const std::string &text, ChatMessage &message)
 	message.role = role(line, message.badges);
 	message.emotes = emotes(line.tag("emotes"), body);
 	message.text = std::move(body);
+	message.rewardId = line.tag("custom-reward-id"); // a channel point reward that asks for text
 	const std::string time = line.tag("tmi-sent-ts");
 	message.timeMs = !time.empty() && time.size() <= 15 && digits(time) ? std::stoll(time)
 									      : QDateTime::currentMSecsSinceEpoch();

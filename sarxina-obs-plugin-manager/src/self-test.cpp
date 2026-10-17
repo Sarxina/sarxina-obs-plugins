@@ -224,7 +224,7 @@ struct Heard {
 	sarxina_role role = SARXINA_ROLE_EVERYONE;
 	size_t badges = 0;
 	int chats = 0; // messages from the feed of all of chat
-	std::string lastChat;
+	std::string lastChat, lastReward;
 	bool enabled = false;
 	std::string mode = "real";
 };
@@ -234,6 +234,7 @@ void heardChat(void *data, const sarxina_chat_message *message)
 	Heard &heard = *static_cast<Heard *>(data);
 	heard.chats++;
 	heard.lastChat = message->text;
+	heard.lastReward = message->reward_id;
 }
 
 void record(void *data, const char *command, const char *args, const sarxina_chat_message *message)
@@ -329,7 +330,8 @@ bool parsing()
 				       m),
 		     "a full message");
 	tally.expect(m.platform == "twitch" && m.id == "b34ccfc7" && m.userId == "4242" && m.userName == "sarxina" &&
-			     m.displayName == "Sarxina" && m.text == "Kappa Keepo Kappa" && m.timeMs == 1700000000123,
+			     m.displayName == "Sarxina" && m.text == "Kappa Keepo Kappa" && m.timeMs == 1700000000123 &&
+			     m.rewardId.empty(),
 		     "its fields");
 	tally.expect(m.role == SARXINA_ROLE_BROADCASTER && m.badges.size() == 2 && m.badges[1].name == "subscriber" &&
 			     m.badges[1].version == "12",
@@ -357,6 +359,12 @@ bool parsing()
 	tally.expect(TwitchChat::parse(":p!p@p PRIVMSG #c :no tags", m) && m.role == SARXINA_ROLE_EVERYONE &&
 			     m.userName == "p" && m.text == "no tags",
 		     "a message without tags");
+	// A channel point reward that asks for text arrives as the text, with the reward's id.
+	tally.expect(TwitchChat::parse("@custom-reward-id=0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77;display-name=Viewer;"
+				       "user-id=9 :viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #sarxina :drop it",
+				       m) &&
+			     m.rewardId == "0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77" && m.text == "drop it",
+		     "a channel point reward with text");
 	for (const char *other : {"PING :tmi.twitch.tv", ":tmi.twitch.tv 001 justinfan1 :Welcome, GLHF!",
 				  ":justinfan1!justinfan1@justinfan1.tmi.twitch.tv JOIN #c", ":tmi.twitch.tv RECONNECT",
 				  "@id=1 :p!p@p PRIVMSG #c", "", "@", ":"})
@@ -445,6 +453,9 @@ bool checks()
 	ChatMessage badEmote = chatter("viewer", SARXINA_ROLE_EVERYONE, "hi");
 	badEmote.emotes.push_back({"25", 1, 9});
 	tally.expect(router.route(badEmote, 0).result == Result::NotText, "an emote past the end");
+	ChatMessage badReward = chatter("viewer", SARXINA_ROLE_EVERYONE, "hi");
+	badReward.rewardId = "one\ntwo";
+	tally.expect(router.route(badReward, 0).result == Result::NotText, "a reward id with a line break");
 
 	return tally.report("checks", "messages handled as expected");
 }
@@ -506,7 +517,8 @@ bool routing()
 			     heard.display == "Viewer6" && heard.text == "!hello Kappa",
 		     "the message as the plugin sees it");
 
-	tally.expect(heard.chats == 18 && heard.lastChat == "!hello Kappa", "all of chat for the plugin that wants it");
+	tally.expect(heard.chats == 18 && heard.lastChat == "!hello Kappa" && heard.lastReward.empty(),
+		     "all of chat for the plugin that wants it");
 
 	plugin.enabled = false;
 	step(20000, chatter("viewer", everyone, "!hello"), Result::PluginOff, "a plugin that is off");
@@ -559,6 +571,11 @@ bool twitchConnection()
 	tally.expect(heard.runs == 1 && heard.args == "from the socket" && heard.role == SARXINA_ROLE_MODERATOR &&
 			     heard.display == "Mod",
 		     "the plugin's handler got the command");
+	twitch.send("@custom-reward-id=0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77;display-name=Viewer;id=a3;user-id=8 "
+		    ":viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #sarxina :a redeem\r\n");
+	tally.expect(waitFor([&] { return heard.chats == 3; }) && heard.lastChat == "a redeem" &&
+			     heard.lastReward == "0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77",
+		     "a channel point reward reaching the feed with its id");
 
 	twitch.send(":tmi.twitch.tv RECONNECT");
 	tally.expect(waitFor([&] { return twitch.connections == 2; }), "connecting again when Twitch asks");

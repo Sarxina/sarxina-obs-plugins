@@ -1,5 +1,5 @@
-# The code every plugin here is built from: the panel, the dock, the link to OBS and the self-test helpers. Compiled
-# once and linked into each plugin and each self-test program.
+# The code the dock plugins are built from: the panel, the dock, the link to OBS and the self-test helpers. Compiled
+# once and linked into each of them and each self-test program.
 
 # The head picture, compiled in. Done here rather than by AUTORCC, which names the compiled file wrongly for the
 # plugins that link an object library.
@@ -25,3 +25,9 @@ add_library(
 )
 sarxina_target_settings(sarxina-shared)
 target_include_directories(sarxina-shared PUBLIC src)
+
+# The Plinko board, for the plugins that have one (PlinkoLive, PlinkoToggle): its pegs and slots, how a ball falls
+# through them, and how they look.
+add_library(sarxina-plinko OBJECT src/physics.hpp src/plinko.cpp src/plinko.hpp src/plinko-painter.cpp src/plinko-painter.hpp)
+sarxina_target_settings(sarxina-plinko)
+target_include_directories(sarxina-plinko PUBLIC src)
