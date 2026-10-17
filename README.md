@@ -1,5 +1,7 @@
 # Sarxina OBS Plugins
 
+Grab the [Sarxina OBS Plugin Manager](../../releases/latest), then install whichever of these you want right from it. Every plugin's zip is also on [Releases](../../releases) if you'd rather install one by hand.
+
 ## SlingLive
 
 The only OBS plugin that makes you hit the right button with a slingshot to Record or Go Live.
