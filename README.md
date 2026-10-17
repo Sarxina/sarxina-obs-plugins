@@ -28,7 +28,9 @@ A look-ahead limiter like Adobe Audition's Hard Limiter: input boost, maximum am
 
 ## Sarxina OBS Plugin Manager
 
-One dock for all of them: check the Sarxina plugins you want under **Choose plugins** to add them to OBS, change each one's settings behind its gear, and let them share one VTube Studio connection and the chat of the Twitch account OBS is connected to (Settings > Stream > Connect Account). Every plugin also works without it.
+The hub the other Sarxina plugins plug into. It's one dock where you pick which plugins you want and change their settings behind each one's gear, and it handles the shared stuff for them: one VTube Studio connection, and chat from the Twitch account OBS is logged into (Settings > Stream > Connect Account), passed to whichever plugin wants it. Not to be confused with OBS's own Plugin Manager under Tools; this one is just for Sarxina plugins.
+
+To get it, close OBS, extract the manager's zip from [Releases](../../releases) into your OBS folder (usually `C:\Program Files\obs-studio`), open OBS and tick it under **Docks**. The Sarxina plugins you have show up under **Choose plugins**: check the ones you want.
 
 ## Install
 
