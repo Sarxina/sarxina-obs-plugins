@@ -1,6 +1,7 @@
 #include "plinkotoggle.hpp"
 
 #include "board-source.hpp"
+#include "plain-text.hpp"
 
 #include <obs-module.h>
 #include <obs.hpp>
@@ -21,11 +22,6 @@ namespace {
 constexpr int kAskMs = 2000; // how often VTube Studio is asked for the model's hotkeys
 constexpr int kPumpMs = 250; // how often a redeem that waits is looked at
 
-QString text(const char *key)
-{
-	return QString::fromUtf8(obs_module_text(key));
-}
-
 QByteArray utf8(const QString &text)
 {
 	return text.toUtf8();
@@ -43,6 +39,7 @@ bool triggerPicked(obs_properties_t *properties, obs_property_t *, obs_data_t *s
 	obs_property_set_visible(obs_properties_get(properties, "command"), !reward);
 	obs_property_set_visible(obs_properties_get(properties, "reward"), reward);
 	obs_property_set_visible(obs_properties_get(properties, "reward_help"), reward);
+	obs_property_set_visible(obs_properties_get(properties, "reward_name"), reward);
 	return true;
 }
 
@@ -85,7 +82,7 @@ void PlinkoToggle::start()
 	if (sarxina_obs_plugin_manager_register(&info)) {
 		blog(LOG_INFO, "[%s] %s loaded, run by the Sarxina OBS Plugin Manager", PLUGIN_TITLE, PLUGIN_VERSION);
 	} else {
-		// No chat and no VTube Studio without it: the boards say so.
+		// No chat and no VTube Studio without it: the boards stay empty, and the log says why.
 		blog(LOG_WARNING, "[%s] %s loaded, but the Sarxina OBS Plugin Manager is not installed", PLUGIN_TITLE,
 		     PLUGIN_VERSION);
 		managed_ = false;
@@ -148,6 +145,7 @@ obs_properties_t *PlinkoToggle::properties()
 	for (const Drops::Reward &r : seen)
 		obs_property_list_add_string(reward, utf8(r.label).constData(), r.id.c_str());
 	obs_properties_add_text(properties, "reward_help", obs_module_text("Reward.Help"), OBS_TEXT_INFO);
+	obs_properties_add_text(properties, "reward_name", obs_module_text("RewardName"), OBS_TEXT_DEFAULT);
 
 	obs_property_t *cooldown =
 		obs_properties_add_int(properties, "cooldown", obs_module_text("Cooldown"), kLeastCooldown, kMostCooldown, 1);
@@ -162,6 +160,7 @@ void PlinkoToggle::getSettings(obs_data_t *settings) const
 	obs_data_set_string(settings, "trigger", now.trigger == Settings::Trigger::Reward ? "reward" : "command");
 	obs_data_set_string(settings, "command", ("!" + now.command).c_str());
 	obs_data_set_string(settings, "reward", now.rewardId.c_str());
+	obs_data_set_string(settings, "reward_name", utf8(now.rewardName).constData());
 	obs_data_set_int(settings, "cooldown", now.cooldownSeconds);
 }
 
@@ -186,6 +185,7 @@ void PlinkoToggle::update(obs_data_t *settings)
 			if (r.id == reward)
 				changed.rewardLabel = r.label;
 	}
+	changed.rewardName = plainText(QString::fromUtf8(obs_data_get_string(settings, "reward_name")), kLongestRewardName);
 	changed.cooldownSeconds =
 		std::clamp(static_cast<int>(obs_data_get_int(settings, "cooldown")), kLeastCooldown, kMostCooldown);
 
@@ -222,6 +222,8 @@ void PlinkoToggle::load()
 				settings.command = command;
 			settings.rewardId = obs_data_get_string(config, "reward_id");
 			settings.rewardLabel = QString::fromUtf8(obs_data_get_string(config, "reward_label"));
+			settings.rewardName = plainText(QString::fromUtf8(obs_data_get_string(config, "reward_name")),
+							kLongestRewardName);
 			settings.cooldownSeconds = std::clamp(static_cast<int>(obs_data_get_int(config, "cooldown")),
 							      kLeastCooldown, kMostCooldown);
 		}
@@ -242,6 +244,7 @@ void PlinkoToggle::save() const
 	obs_data_set_string(config, "command", now.command.c_str());
 	obs_data_set_string(config, "reward_id", now.rewardId.c_str());
 	obs_data_set_string(config, "reward_label", utf8(now.rewardLabel).constData());
+	obs_data_set_string(config, "reward_name", utf8(now.rewardName).constData());
 	obs_data_set_int(config, "cooldown", now.cooldownSeconds);
 	obs_data_save_json_safe(config, path, "tmp", "bak");
 }
@@ -281,28 +284,15 @@ void PlinkoToggle::answered(bool ok, const char *json)
 
 void PlinkoToggle::refresh()
 {
+	// The board shows nothing but the toggles and how chat drops a ball. Without the manager, VTube Studio or a model
+	// it is empty; the log says why.
 	Content content;
 	const Settings &now = drops_.settings();
-	if (!managed_) {
-		content.status = text("Status.NoManager");
-	} else if (!enabled_) {
-		content.status = text("Status.Off");
-	} else {
-		switch (model_.state) {
-		case Model::State::Unknown: break;
-		case Model::State::NotConnected: content.status = text("Status.NoVts"); break;
-		case Model::State::NoModel: content.status = text("Status.NoModel"); break;
-		case Model::State::Loaded:
-			if (model_.toggles.empty())
-				content.status = text("Status.NoToggles").arg(model_.name);
-			else
-				content.toggles = model_.toggles;
-			break;
-		}
-		if (now.trigger == Settings::Trigger::Command)
-			content.hint = text("Hint.Command").arg(QString::fromStdString("!" + now.command));
-		else
-			content.hint = text(now.rewardId.empty() ? "Hint.PickReward" : "Hint.Reward");
+	if (managed_ && enabled_) {
+		if (model_.state == Model::State::Loaded)
+			content.toggles = model_.toggles;
+		content.label = now.trigger == Settings::Trigger::Command ? QString::fromStdString("!" + now.command)
+									   : now.rewardName;
 	}
 	showOnBoards(content);
 }

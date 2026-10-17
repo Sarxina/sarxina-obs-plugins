@@ -10,12 +10,16 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QMenu>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStyle>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWidgetAction>
+
+#include <algorithm>
 
 namespace sarxina {
 
@@ -84,15 +88,24 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	showTwitch();
 	showVts();
 
-	// Plugins
+	// Plugins: the dropdown to choose them, and the list of those chosen
 	auto *plugins = new QGroupBox(text("Plugins"), content);
 	plugins_ = new QVBoxLayout(plugins);
-	noPlugins_ = plain(text("NoPlugins"), plugins);
-	plugins_->addWidget(noPlugins_);
+	choose_ = new QToolButton(plugins);
+	choose_->setText(text("Choose"));
+	choose_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+	choose_->setPopupMode(QToolButton::InstantPopup);
+	choose_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+	choices_ = new QMenu(choose_);
+	choose_->setMenu(choices_);
+	plugins_->addWidget(choose_);
+	empty_ = plain(QString(), plugins);
+	plugins_->addWidget(empty_);
 	layout->addWidget(plugins);
 	layout->addStretch(1);
 	for (const auto &plugin : manager.plugins())
 		addRow(plugin.get());
+	showList();
 	connect(&manager, &Manager::pluginRegistered, this, &ManagerDock::addRow);
 	connect(&manager, &Manager::pluginChanged, this, &ManagerDock::showRow);
 }
@@ -147,49 +160,56 @@ void ManagerDock::showVts()
 
 // ---- plugins --------------------------------------------------------------------------------------------------------
 
-// A plugin's row, one line however many there are: its name, the gear once it is added, and Add or Remove. What it
-// does folds out under the name.
+// A plugin's check box in the dropdown, and its line in the list, one line however many there are: its name and the
+// gear. What it does folds out under the name. The line shows only while the plugin is added.
 void ManagerDock::addRow(Plugin *plugin)
 {
-	noPlugins_->hide();
+	// The check box, with room around it like the other entries of a menu.
+	auto *holder = new QWidget(choices_);
+	auto *margins = new QVBoxLayout(holder);
+	margins->setContentsMargins(8, 3, 16, 3);
+	auto *pick = new QCheckBox(name(plugin), holder);
+	pick->setToolTip(QString::fromUtf8(plugin->info->description ? plugin->info->description : ""));
+	margins->addWidget(pick);
+	auto *action = new QWidgetAction(choices_);
+	action->setDefaultWidget(holder);
+	choices_->addAction(action);
+	connect(pick, &QCheckBox::toggled, this, [this, plugin](bool added) { manager_.setEnabled(*plugin, added); });
+
 	QWidget *list = plugins_->parentWidget();
-	auto *row = new QWidget(list);
-	auto *grid = new QGridLayout(row);
+	auto *line = new QWidget(list);
+	auto *grid = new QGridLayout(line);
 	grid->setContentsMargins(0, 0, 0, 0);
 	grid->setColumnStretch(0, 1);
 
 	// The name opens and closes the description, with OBS's own arrow (the one that folds groups in Sources).
 	// Checked means folded, as in OBS.
-	auto *title = new QCheckBox(name(plugin), row);
+	auto *title = new QCheckBox(name(plugin), line);
 	title->setProperty("class", "indicator-expand");
 	title->setChecked(true);
 	QFont bold = title->font();
 	bold.setBold(true);
 	title->setFont(bold);
-	QLabel *about = plain(QString::fromUtf8(plugin->info->description ? plugin->info->description : ""), row);
+	QLabel *about = plain(QString::fromUtf8(plugin->info->description ? plugin->info->description : ""), line);
 	about->setContentsMargins(style()->pixelMetric(QStyle::PM_IndicatorWidth, nullptr, title) +
 					  style()->pixelMetric(QStyle::PM_CheckBoxLabelSpacing, nullptr, title),
 				  0, 0, 0);
 	about->hide();
 	connect(title, &QCheckBox::toggled, about, [about](bool folded) { about->setVisible(!folded); });
 
-	auto *gear = new QToolButton(row);
+	auto *gear = new QToolButton(line);
 	gear->setProperty("class", "icon-gear"); // OBS's own gear, from its theme
 	gear->setText(QStringLiteral("⚙"));  // when there is no theme
 	gear->setToolTip(text("Settings").arg(name(plugin)));
 	gear->setAccessibleName(gear->toolTip());
 	connect(gear, &QToolButton::clicked, this, [this, plugin] { openSettings(plugin); });
 
-	auto *add = new QPushButton(row);
-	connect(add, &QPushButton::clicked, this, [this, plugin] { manager_.setEnabled(*plugin, !plugin->enabled); });
-
 	grid->addWidget(title, 0, 0);
 	grid->addWidget(gear, 0, 1);
-	grid->addWidget(add, 0, 2);
-	grid->addWidget(about, 1, 0, 1, 3);
-	plugins_->addWidget(row);
+	grid->addWidget(about, 1, 0, 1, 2);
+	plugins_->addWidget(line);
 
-	rows_[plugin] = {gear, add};
+	rows_[plugin] = {line, gear, pick};
 	showRow(plugin);
 }
 
@@ -199,14 +219,28 @@ void ManagerDock::showRow(Plugin *plugin)
 	if (found == rows_.end())
 		return;
 	Row &row = found->second;
-	row.add->setText(text(plugin->enabled ? "Remove" : "Add"));
-	row.add->setAccessibleName(text(plugin->enabled ? "Remove.Named" : "Add.Named").arg(name(plugin)));
-	// Only an added plugin has settings to change, and only if it describes some.
-	row.gear->setVisible(plugin->enabled && plugin->info->get_properties);
+	{
+		const QSignalBlocker quiet(row.pick);
+		row.pick->setChecked(plugin->enabled);
+	}
+	row.line->setVisible(plugin->enabled);
+	// Only a plugin that describes settings has a gear.
+	row.gear->setVisible(plugin->info->get_properties != nullptr);
 	if (row.settings && !plugin->enabled)
 		row.settings->close();
 	if (row.form)
 		row.form->reload();
+	showList();
+}
+
+// What the list says when it is empty, and the dropdown only when there is something to choose.
+void ManagerDock::showList()
+{
+	const bool installed = !rows_.empty();
+	const bool added = std::any_of(rows_.begin(), rows_.end(), [](const auto &row) { return row.first->enabled; });
+	choose_->setEnabled(installed);
+	empty_->setText(text(installed ? "NoneAdded" : "NoPlugins"));
+	empty_->setVisible(!added);
 }
 
 void ManagerDock::openSettings(Plugin *plugin)

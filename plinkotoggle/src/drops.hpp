@@ -25,12 +25,14 @@ struct Settings {
 	std::string command = "plinko"; // without the "!"
 	std::string rewardId;           // empty: none picked
 	QString rewardLabel;            // how the picked reward is shown in the settings
+	QString rewardName;             // as the streamer typed it, for the board: Twitch's chat gives only the id
 	int cooldownSeconds = 10;
 };
 
 inline constexpr int kLeastCooldown = 1;  // seconds
 inline constexpr int kMostCooldown = 600; // seconds
 inline constexpr size_t kMostWaiting = 50; // redeems
+inline constexpr int kLongestRewardName = 45; // characters, as long as Twitch allows
 
 // A command as typed in the settings ("!Plinko", "plinko") as chat types it after the "!", or empty if it cannot be
 // one: 1 to 25 of a-z, 0-9 and _, like every Sarxina chat command.

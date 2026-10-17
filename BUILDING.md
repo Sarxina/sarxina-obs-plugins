@@ -19,7 +19,7 @@ Sarxina Parametric EQ, in `sarxina-parametric-eq\`, is an audio filter rather th
 The Sarxina OBS Plugin Manager is a plugin of its own, in `sarxina-obs-plugin-manager\`:
 
 - `shared\src\sarxina-obs-plugin-manager.h` is all that the manager and a plugin share. Plugins build against it and reach the manager through OBS's global procedure handler, so neither links the other, and a plugin runs on its own when the manager is not installed.
-- `manager` keeps the plugins that registered and whether each is added; `manager-dock` is the dock, and `properties-form` draws the settings behind a plugin's gear from what the plugin says about them.
+- `manager` keeps the plugins that registered and whether each is added; `manager-dock` is the dock, where a dropdown of check boxes adds plugins to the streamer's list, and `properties-form` draws the settings behind a plugin's gear from what the plugin says about them.
 - `chat-router` is the one way chat reaches plugins; the checks every message passes are listed at the top of `chat-router.hpp`. `twitch-chat` reads, without logging in, the chat of the Twitch account OBS is connected to (Settings > Stream > Connect Account; the manager reads only the account's name from the OBS profile, never its tokens). `vtube-studio` is the one VTube Studio connection plugins share, and `websocket` carries both.
 - `examples\example-plugin` is the smallest plugin the manager can run (see the last section).
 
@@ -99,6 +99,7 @@ A passing run looks like this:
 [Sarxina OBS Plugin Manager] self-test: routing: 28 of 28 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: Twitch connection: 13 of 13 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: VTube Studio: 17 of 17 steps as expected: OK
+[Sarxina OBS Plugin Manager] self-test: choosing plugins: 6 of 6 steps as expected: OK
 [Sarxina OBS Plugin Manager] self-test: passed
 ```
 

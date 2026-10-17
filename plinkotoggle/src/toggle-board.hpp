@@ -1,7 +1,8 @@
 // PlinkoToggle's board as viewers see it: the shared Plinko board (plinko.hpp) with one slot for each toggle of the
 // model loaded in VTube Studio, in VTube Studio's order, each with the toggle's name on a button at its bottom. Chat
 // drops balls from the top centre, each one the head PlinkoLive drops, with the chatter's name over it. The toggle a
-// ball comes down on is switched, and its button flashes.
+// ball comes down on is switched, and its button flashes. Along the bottom is one label: what chat types or redeems to
+// drop a ball. Nothing else is drawn on it.
 //
 // Nothing here knows about OBS: the source feeds the board time and what to show, and puts the picture it paints on
 // screen. It is laid out in units, the scale of PlinkoLive's panel, and painted at two pixels a unit. It grows with the
@@ -26,16 +27,12 @@ class QPainter;
 
 namespace sarxina::plinkotoggle {
 
-// What the board shows: the toggles, or, when there are none, why not. The hint says how chat drops a ball.
+// What the board shows: the toggles, and the label along the bottom, the command ("!plinko") or the reward's name.
 struct Content {
 	std::vector<Toggle> toggles;
-	QString status;
-	QString hint;
+	QString label;
 
-	bool operator==(const Content &other) const
-	{
-		return toggles == other.toggles && status == other.status && hint == other.hint;
-	}
+	bool operator==(const Content &other) const { return toggles == other.toggles && label == other.label; }
 	bool operator!=(const Content &other) const { return !(*this == other); }
 };
 
@@ -50,7 +47,7 @@ class ToggleBoard {
 public:
 	ToggleBoard();
 
-	// New toggles start the board afresh, without the balls that were falling; a new status or hint only shows.
+	// New toggles start the board afresh, without the balls that were falling; a new label only shows.
 	void setContent(const Content &content);
 	const Content &content() const { return content_; }
 	bool canDrop() const { return !content_.toggles.empty(); }
@@ -128,7 +125,7 @@ private:
 	double pending_ = 0; // seconds not stepped yet
 	std::mt19937 seeds_;
 
-	QFont label_, hint_, status_, name_;
+	QFont label_, bottom_, name_; // a toggle's name, the label along the bottom, a chatter's name
 	QImage head_, headScaled_;
 	QImage still_; // everything that does not move
 	bool stillDirty_ = true;

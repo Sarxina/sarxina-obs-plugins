@@ -33,11 +33,11 @@ constexpr double kSlotInset = 4.0; // between a button and the sides and the flo
 // otherwise hold the head between them.
 constexpr double kDividerGap = 2 * kHeadRadius + 6;
 constexpr double kSlotRoom = kDividerGap + 24; // from the bottom row of pegs down to the buttons, at the least
-constexpr double kStrip = 24.0;          // along the bottom, under the buttons, with the hint
+constexpr double kStrip = 30.0;          // along the bottom, under the buttons, with the label
 constexpr double kButtonHeight = 28.0;   // with the names written across
 constexpr double kTallestButton = 160.0; // with the names written upwards
 constexpr double kLabelMargin = 8.0;
-constexpr double kStatusRoom = 72.0; // for why there are no toggles, where the buttons would be
+constexpr double kEmptyRoom = 60.0; // where the buttons would be, while there are no toggles
 constexpr double kCorner = 10.0;
 constexpr double kNameHeight = 20.0; // a name tag
 constexpr double kRestSeconds = 1.2; // a ball stays in its slot this long, then fades
@@ -84,8 +84,7 @@ ToggleBoard::ToggleBoard()
 	: plinko_(PlinkoShape{}),
 	  seeds_(std::random_device{}()),
 	  label_(font(13)),
-	  hint_(font(12, QFont::DemiBold)),
-	  status_(font(15)),
+	  bottom_(font(16, QFont::DemiBold)),
 	  name_(font(12, QFont::DemiBold)),
 	  head_(QStringLiteral(":/plinkotoggle/head.png"))
 {
@@ -121,7 +120,7 @@ void ToggleBoard::layOut()
 		widest = std::max(widest, metrics.horizontalAdvance(toggle.name));
 	vertical_ = widest > across;
 	buttonHeight_ = vertical_ ? std::clamp(widest + 2 * kLabelMargin, 2 * kButtonHeight, kTallestButton) : kButtonHeight;
-	ground_ = std::ceil(plinko_.bottomRowY() + kSlotRoom + (count ? buttonHeight_ : kStatusRoom) + kSlotInset);
+	ground_ = std::ceil(plinko_.bottomRowY() + kSlotRoom + (count ? buttonHeight_ : kEmptyRoom) + kSlotInset);
 	height_ = ground_ + kStrip;
 	plinko_.setFloor(ground_, ground_ - kSlotInset - buttonHeight_ - kHeadRadius);
 	pictureSize_ = QSize(static_cast<int>(std::ceil(width_ * kScale)), static_cast<int>(std::ceil(height_ * kScale)));
@@ -287,14 +286,6 @@ std::vector<ToggleBoard::Sprite> ToggleBoard::sprites() const
 		}
 	}
 
-	// A head waits at the top whenever the last one has fallen clear of it.
-	const Point start = plinko_.shape().start;
-	const bool clear = std::none_of(balls_.begin(), balls_.end(), [&start](const Ball &b) {
-		return b.y < start.y + 2 * kHeadDrawRadius + 8;
-	});
-	if (canDrop() && clear)
-		sprites.push_back({Sprite::Kind::Head, pixels(start.x, start.y), 0, 1, -1, {}});
-
 	for (const Ball &ball : balls_) {
 		const double fade = ball.down ? std::clamp(1.0 - (ball.downFor - kRestSeconds) / kFadeSeconds, 0.0, 1.0) : 1.0;
 		sprites.push_back({Sprite::Kind::Head, pixels(ball.x, ball.y), ball.rotation, fade, -1, {}});
@@ -308,8 +299,7 @@ std::vector<ToggleBoard::Sprite> ToggleBoard::sprites() const
 	return sprites;
 }
 
-// The board without what moves: the panel, the pegs and the buttons, or why there are none, and the hint along the
-// bottom.
+// The board without what moves: the panel, the pegs, the buttons and the label along the bottom.
 void ToggleBoard::paintStill()
 {
 	still_ = QImage(pictureSize_, QImage::Format_ARGB32_Premultiplied);
@@ -326,22 +316,14 @@ void ToggleBoard::paintStill()
 	g.fillRect(QRectF(0, ground_, width_, height_ - ground_), kGroundColor);
 	g.restore();
 
-	g.setPen(kDimColor);
-	g.setFont(hint_);
+	g.setPen(kTextColor);
+	g.setFont(bottom_);
 	const QRectF strip(10, ground_, width_ - 20, height_ - ground_);
-	g.drawText(strip, Qt::AlignLeft | Qt::AlignVCenter,
-		   QFontMetricsF(hint_).elidedText(content_.hint, Qt::ElideRight, strip.width()));
+	g.drawText(strip, Qt::AlignCenter, QFontMetricsF(bottom_).elidedText(content_.label, Qt::ElideRight, strip.width()));
 
 	paintPlinko(g, plinko_, kIdleColor);
 	for (int slot = 0; slot < static_cast<int>(labels_.size()); slot++)
 		paintButton(g, buttonRect(slot), slot, false);
-
-	if (!content_.status.isEmpty()) {
-		g.setPen(kTextColor);
-		g.setFont(status_);
-		const double top = plinko_.bottomRowY() + kSlotRoom;
-		g.drawText(QRectF(16, top, width_ - 32, ground_ - top), Qt::AlignCenter | Qt::TextWordWrap, content_.status);
-	}
 	stillDirty_ = false;
 	stillVersion_++;
 }

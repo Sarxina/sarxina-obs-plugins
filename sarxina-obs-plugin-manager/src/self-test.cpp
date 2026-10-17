@@ -7,8 +7,10 @@
 //   3. Commands reach the plugin that registered them, and only when they may.
 //   4. The whole way: a stand-in Twitch sends chat over a real websocket, and a plugin's handler gets the command.
 //   5. VTube Studio over a real websocket: allowing the manager once, logging in with the remembered token, never
-//      asking again on its own, and a plugin's request and its answer.
-// Given a folder, it also paints the dock into dock.png there, and what a plugin's gear shows into settings.png.
+//      asking again on its own, and a plugin's request and its answer, also a long one in many frames.
+//   6. The dock: the dropdown holds every plugin, and checking one adds it to OBS and to the list.
+// Given a folder, it also paints the dock into dock.png there, its dropdown into dropdown.png, and what a plugin's gear
+// shows into settings.png.
 //
 // Inside OBS (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1) checkInObs also lists the plugins that registered through OBS
 // and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would.
@@ -25,11 +27,13 @@
 #include <QElapsedTimer>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QMenu>
 #include <QPixmap>
 #include <QPointer>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QThread>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <deque>
@@ -706,6 +710,80 @@ bool vtubeStudio()
 	return tally.report("VTube Studio", "steps as expected");
 }
 
+// ---- 6. the dock: choosing plugins --------------------------------------------------------------------------------------
+
+// The dropdown with every installed plugin, and the check box of the one named.
+QMenu *dropdown(ManagerDock &dock)
+{
+	for (QToolButton *button : dock.findChildren<QToolButton *>())
+		if (button->menu())
+			return button->menu();
+	return nullptr;
+}
+
+QCheckBox *pick(ManagerDock &dock, const char *name)
+{
+	QMenu *menu = dropdown(dock);
+	for (QCheckBox *box : menu ? menu->findChildren<QCheckBox *>() : QList<QCheckBox *>())
+		if (box->text() == name)
+			return box;
+	return nullptr;
+}
+
+// A plugin's line in the list, by its name.
+QWidget *line(ManagerDock &dock, const char *name)
+{
+	for (QCheckBox *title : dock.findChildren<QCheckBox *>())
+		if (title->property("class").toString() == "indicator-expand" && title->text() == name)
+			return title->parentWidget();
+	return nullptr;
+}
+
+bool choosing()
+{
+	Tally tally;
+	Heard first, second;
+	const sarxina_plugin_info one = testPlugin(first, "first", "Test plugin");
+	const sarxina_plugin_info two = testPlugin(second, "second", "Another test plugin");
+	Manager manager(Manager::Use::SelfTest);
+	ManagerDock dock(manager);
+	dock.setAttribute(Qt::WA_DontShowOnScreen);
+	dock.show();
+	tally.expect(dropdown(dock) && !dropdown(dock)->parentWidget()->isEnabled(), "no plugins: nothing to choose");
+	manager.add(&one);
+	manager.add(&two);
+	QCheckBox *a = pick(dock, "Test plugin"), *b = pick(dock, "Another test plugin");
+	tally.expect(a && b && !a->isChecked() && !b->isChecked() && dropdown(dock)->parentWidget()->isEnabled(),
+		     "both in the dropdown, neither checked");
+	tally.expect(line(dock, "Test plugin") && !line(dock, "Test plugin")->isVisibleTo(&dock) &&
+			     !line(dock, "Another test plugin")->isVisibleTo(&dock),
+		     "and neither in the list");
+	if (b)
+		b->setChecked(true);
+	tally.expect(second.enabled && manager.plugins()[1]->enabled && line(dock, "Another test plugin")->isVisibleTo(&dock) &&
+			     !first.enabled && !line(dock, "Test plugin")->isVisibleTo(&dock),
+		     "checking one adds it, to OBS and to the list");
+	if (b)
+		b->setChecked(false);
+	tally.expect(!second.enabled && !line(dock, "Another test plugin")->isVisibleTo(&dock), "unchecking takes it away");
+	manager.setEnabled(*manager.plugins()[0], true);
+	tally.expect(a && a->isChecked() && line(dock, "Test plugin")->isVisibleTo(&dock),
+		     "added some other way, it is checked and in the list");
+	return tally.report("choosing plugins", "steps as expected");
+}
+
+void saveDropdown(ManagerDock &dock, const QString &file)
+{
+	QMenu *menu = dropdown(dock);
+	if (!menu)
+		return;
+	menu->setAttribute(Qt::WA_DontShowOnScreen);
+	menu->popup(QPoint(0, 0));
+	waitFor([] { return false; }, 100);
+	test::report(menu->grab().save(file, "PNG"), "a picture of the dropdown in %s", file.toUtf8().constData());
+	menu->hide();
+}
+
 // ---- the picture ----------------------------------------------------------------------------------------------------
 
 void picture(const char *folder)
@@ -729,7 +807,9 @@ void picture(const char *folder)
 	dock.setAttribute(Qt::WA_DontShowOnScreen);
 	dock.resize(380, 520);
 	dock.show();
-	dock.findChildren<QCheckBox *>().at(1)->setChecked(false); // the second plugin's description, unfolded
+	for (QCheckBox *title : dock.findChildren<QCheckBox *>())
+		if (title->property("class").toString() == "indicator-expand" && title->text() == "Test plugin")
+			title->setChecked(false); // its description, unfolded
 
 	manager.followTwitchAccount("sarxina");
 	QByteArray cap, nick, join;
@@ -739,6 +819,7 @@ void picture(const char *folder)
 
 	const QString file = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock.png"));
 	test::report(dock.grab().save(file, "PNG"), "a picture of the dock in %s", file.toUtf8().constData());
+	saveDropdown(dock, QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dropdown.png")));
 	manager.followTwitchAccount("");
 
 	// What the gear shows: the settings the plugin describes, drawn by the manager.
@@ -763,12 +844,15 @@ void picture(const char *folder)
 		more.back().commands = nullptr;
 		more.back().command_count = 0;
 		manager.add(&more.back());
+		if (i % 3 == 0)
+			manager.setEnabled(*manager.plugins().back(), true);
 	}
 	dock.resize(380, 720);
 	waitFor([] { return false; }, 200);
 	const QString many = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock-22-plugins.png"));
 	test::report(dock.grab().save(many, "PNG"), "a picture of the dock with 22 plugins in %s",
 		     many.toUtf8().constData());
+	saveDropdown(dock, QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dropdown-22-plugins.png")));
 }
 
 } // namespace
@@ -781,6 +865,7 @@ bool runSelfTest(const char *picturesFolder)
 	passed &= routing();
 	passed &= twitchConnection();
 	passed &= vtubeStudio();
+	passed &= choosing();
 	picture(picturesFolder);
 	test::report(passed, "%s", passed ? "passed" : "FAILED");
 	return passed;

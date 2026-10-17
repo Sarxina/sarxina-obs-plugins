@@ -300,14 +300,15 @@ void settingsShown(PlinkoToggle &plugin)
 	obs_data_set_string(settings, "trigger", "command");
 	obs_properties_apply_settings(properties, settings);
 	const bool forCommand = shown("trigger") && shown("command") && !shown("reward") && !shown("reward_help") &&
-				shown("cooldown");
+				!shown("reward_name") && shown("cooldown");
 	obs_data_set_string(settings, "trigger", "reward");
 	obs_properties_apply_settings(properties, settings);
-	const bool forReward = !shown("command") && shown("reward") && shown("reward_help") && shown("cooldown");
+	const bool forReward = !shown("command") && shown("reward") && shown("reward_help") && shown("reward_name") &&
+			       shown("cooldown");
 	obs_properties_destroy(properties);
 	test::report(forCommand && forReward,
-		     "settings behind the gear: the command (now %s) for a command, the reward and how to pick it for a "
-		     "reward, the cooldown (now %lld s) for both: %s",
+		     "settings behind the gear: the command (now %s) for a command, the reward, how to pick it and its "
+		     "name for a reward, the cooldown (now %lld s) for both: %s",
 		     command.c_str(), cooldown, forCommand && forReward ? "OK" : "FAILED");
 }
 

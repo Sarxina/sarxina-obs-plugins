@@ -4,7 +4,7 @@
 // so the boards follow a new model or a changed hotkey; a ball that comes down in a slot sends HotkeyTriggerRequest
 // for that slot's hotkey.
 //
-// Without the manager there is no chat and no VTube Studio, and the boards say so.
+// Without the manager there is no chat and no VTube Studio, and the boards stay empty.
 #pragma once
 
 #include "drops.hpp"

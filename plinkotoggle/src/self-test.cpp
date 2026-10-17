@@ -60,7 +60,7 @@ const char *const kNames[] = {"Glasses",   "Heart Eyes", "Blush",  "Tears",     
 Content toggles(int count, bool longNames = false)
 {
 	Content content;
-	content.hint = QStringLiteral("!plinko in chat drops a ball");
+	content.label = QStringLiteral("!plinko");
 	for (int i = 0; i < count; i++) {
 		Toggle toggle;
 		toggle.id = "hotkey-" + std::to_string(i);
@@ -157,13 +157,13 @@ bool boards()
 
 	// No toggles: no balls.
 	ToggleBoard empty;
-	Content status;
-	status.status = QStringLiteral("Connect VTube Studio in the Sarxina OBS Plugin Manager.");
-	empty.setContent(status);
+	Content none;
+	none.label = QStringLiteral("!plinko");
+	empty.setContent(none);
 	empty.drop(QStringLiteral("someone"), 1);
-	const bool none = !empty.canDrop() && empty.falling() == 0;
-	test::report(none, "a board without toggles takes no ball: %s", none ? "OK" : "FAILED");
-	return all && none;
+	const bool takesNone = !empty.canDrop() && empty.falling() == 0 && empty.sprites().empty();
+	test::report(takesNone, "a board without toggles takes no ball: %s", takesNone ? "OK" : "FAILED");
+	return all && takesNone;
 }
 
 // ---- 2. chat --------------------------------------------------------------------------------------------------------
@@ -362,10 +362,14 @@ void pictures(const char *folder)
 	save(many, "05-thirty-toggles");
 
 	ToggleBoard off;
-	Content status;
-	status.status = QStringLiteral("Connect VTube Studio in the Sarxina OBS Plugin Manager.");
-	off.setContent(status);
-	save(off, "06-not-connected");
+	off.setContent(Content{});
+	save(off, "06-no-toggles");
+
+	ToggleBoard redeem;
+	Content reward = toggles(5);
+	reward.label = QStringLiteral("Drop a Sarxina");
+	redeem.setContent(reward);
+	save(redeem, "08-reward");
 
 	ToggleBoard names;
 	Content content = toggles(6, true);
