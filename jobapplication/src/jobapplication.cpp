@@ -1,5 +1,6 @@
 #include "jobapplication.hpp"
 
+#include "paper-item.hpp"
 #include "paper.hpp"
 
 #include <obs-module.h>
@@ -257,10 +258,14 @@ void JobApplication::paint()
 		return;
 	QElapsedTimer took;
 	took.start();
-	const QByteArray picture = png(paintPicture(form_, kPaperSeed));
+	const QImage sheet = paintSheet(form_, kPaperSeed);
+	const QByteArray picture = png(paintPicture(sheet));
+	const QByteArray texture = png(paperTexture(sheet)); // the same sheet, for the Live2D item that bends
 	prop_.setPicture(picture);
-	blog(LOG_INFO, "[%s] the paper painted: %lld KB, in %lld ms", PLUGIN_TITLE,
-	     static_cast<long long>(picture.size() / 1024), static_cast<long long>(took.elapsed()));
+	prop_.setTexture(texture);
+	blog(LOG_INFO, "[%s] the paper painted: %lld KB as a picture, %lld KB as the Live2D item's texture, in %lld ms",
+	     PLUGIN_TITLE, static_cast<long long>(picture.size() / 1024), static_cast<long long>(texture.size() / 1024),
+	     static_cast<long long>(took.elapsed()));
 }
 
 } // namespace sarxina::jobapplication

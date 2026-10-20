@@ -4,13 +4,17 @@
 sarxina_add_obs_module(
   jobapplication
   TITLE JobApplication
-  VERSION 1.0.0
+  VERSION 1.1.0
   DESCRIPTION "JobApplication plugin for OBS Studio"
   SOURCES
     src/form.cpp
     src/form.hpp
+    src/moc3.cpp
+    src/moc3.hpp
     src/paper.cpp
     src/paper.hpp
+    src/paper-item.cpp
+    src/paper-item.hpp
     src/paper-prop.cpp
     src/paper-prop.hpp
     src/self-test.cpp

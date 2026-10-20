@@ -360,7 +360,11 @@ QImage paintSheet(const Form &form, uint32_t seed)
 
 QImage paintPicture(const Form &form, uint32_t seed)
 {
-	const QImage sheet = paintSheet(form, seed);
+	return paintPicture(paintSheet(form, seed));
+}
+
+QImage paintPicture(const QImage &sheet)
+{
 	const QSize size = pictureSize();
 	const QRectF at = sheetInPicture();
 

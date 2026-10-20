@@ -35,6 +35,7 @@ inline constexpr qsizetype kLargestPicture = 5 * 1024 * 1024;
 QImage paintSheet(const Form &form, uint32_t seed);
 // The picture VTube Studio gets: the sheet, out of square, and its shadow.
 QImage paintPicture(const Form &form, uint32_t seed);
+QImage paintPicture(const QImage &sheet); // from a sheet painted already
 // As a PNG file.
 QByteArray png(const QImage &picture);
 

@@ -1,6 +1,6 @@
 // The part of JobApplication's self-test that needs OBS, the Sarxina OBS Plugin Manager and a running VTube Studio
 // (JOBAPPLICATION_SELFTEST=1). It says whether the manager runs the plugin, its trigger and size, the model VTube Studio
-// has loaded, and the ArtMesh the paper would be pinned to.
+// has loaded, the ArtMesh the paper would be pinned to, and where VTube Studio's Items folder is (for the Live2D item).
 //
 // With JOBAPPLICATION_SELFTEST_SHOW=1 it also brings the paper up the way the hotkey does, leaves it up for eight
 // seconds, and takes it down again: the first time, VTube Studio asks the streamer once to allow custom images, and the
@@ -8,6 +8,7 @@
 #include "jobapplication.hpp"
 #include "self-test.hpp"
 
+#include <QDir>
 #include <QJsonArray>
 #include <QTimer>
 
@@ -58,6 +59,11 @@ void showAndHide(JobApplication &plugin)
 				     prop.instance().toUtf8().constData(),
 				     prop.pinnedTo().isEmpty() ? "nothing" : prop.pinnedTo().toUtf8().constData(),
 				     prop.pinnedTo().isEmpty() ? "NOT PINNED" : "OK");
+			test::report(prop.bends(), "in OBS: %s%s%s: %s",
+				     prop.bends() ? "it is the Live2D item " : "it is the flat picture, not the Live2D item",
+				     prop.bends() ? prop.itemName().toUtf8().constData() : "",
+				     prop.bends() ? (" in " + QDir::toNativeSeparators(prop.itemsFolder())).toUtf8().constData() : "",
+				     prop.bends() ? "OK" : "DOES NOT BEND (the log above says why)");
 			QTimer::singleShot(kStayMs, &plugin, [&plugin, &prop] {
 				plugin.toggle(QStringLiteral("the self-test"));
 				waitFor(
@@ -93,6 +99,10 @@ void checkInObs(JobApplication &plugin)
 					: model.value(QStringLiteral("message")).toString().toUtf8().constData());
 			return;
 		}
+		const QString items = findItemsFolder(QStringLiteral("Items"));
+		test::report(!items.isEmpty(), "in OBS: VTube Studio's Items folder: %s",
+			     items.isEmpty() ? "NOT FOUND (the paper will come up as a flat picture)"
+					     : QDir::toNativeSeparators(items).toUtf8().constData());
 		const QJsonObject position = model.value(QStringLiteral("modelPosition")).toObject();
 		test::report(true, "in OBS: VTube Studio has %s loaded, at %.2f, %.2f, size %.1f, turned %.1f degrees",
 			     model.value(QStringLiteral("modelName")).toString().toUtf8().constData(),

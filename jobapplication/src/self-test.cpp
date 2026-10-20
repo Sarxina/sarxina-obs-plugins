@@ -9,22 +9,32 @@
 //      the permission box, menus that are open, toggles that come while it is busy, the paper taken away in VTube
 //      Studio, no model, no manager.
 //   6. The chat command.
+//   7. The paper as a Live2D item: its .moc3 read back; how it bends (held at the top, turned about it, curled toward
+//      the camera or back, twisted, never stretched); its texture; its physics and VTube Studio settings; its folder
+//      written into and taken out of an Items folder; and up and down that way with the stand-in for VTube Studio,
+//      and the picture whenever it cannot be.
 // Given a folder, it also writes the picture VTube Studio gets, the flat sheet, and one filled in, as PNG files there.
 // Inside OBS, in-obs-check.cpp goes on from here.
 #include "self-test.hpp"
 
 #include "chat-trigger.hpp"
 #include "form.hpp"
+#include "moc3.hpp"
+#include "paper-item.hpp"
 #include "paper-prop.hpp"
 #include "paper.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QRegularExpression>
+#include <QTemporaryDir>
 #include <QTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <set>
 #include <string>
@@ -260,6 +270,12 @@ struct StandIn {
 	std::set<QString> items;
 	int next = 0;
 	double lastSize = -1;
+	// Live2D items: the Items folder VTube Studio reads (none: VTube Studio is not found), whether it sees what is put
+	// there, and an error it answers loading one with (0: none).
+	QString itemsFolder;
+	bool seesItems = true;
+	int refusesItems = 0;
+	QJsonObject lastLoad;
 
 	PaperProp::Send send()
 	{
@@ -300,7 +316,31 @@ struct StandIn {
 			permissionGiven = true;
 			return {{"grantSuccess", true}, {"requestedPermission", "LoadCustomImagesAsItems"}};
 		}
+		if (type == "VTSFolderInfoRequest")
+			return {{"models", "Live2DModels"}, {"items", "Items"}, {"backgrounds", "Backgrounds"}};
+		if (type == "ItemLoadRequest" && data.value("customDataBase64").toString().isEmpty()) {
+			lastLoad = data;
+			const QString name = data.value("fileName").toString();
+			if (!seesItems || itemsFolder.isEmpty() || !QDir(itemsFolder).exists(name)) {
+				ok = false;
+				return error(751, "Item file not found");
+			}
+			if (refusesItems) {
+				ok = false;
+				return error(refusesItems, "This item cannot be loaded");
+			}
+			if (menusOpen > 0) {
+				menusOpen--;
+				ok = false;
+				return error(753, "Cannot load items right now");
+			}
+			lastSize = data.value("size").toDouble();
+			const QString id = QStringLiteral("item-%1").arg(++next);
+			items.insert(id);
+			return {{"instanceID", id}, {"fileName", name}};
+		}
 		if (type == "ItemLoadRequest") {
+			lastLoad = data;
 			if (needsPermission && !permissionGiven) {
 				ok = false;
 				return error(9, "This request requires the LoadCustomImagesAsItems permission");
@@ -323,10 +363,14 @@ struct StandIn {
 			return {{"unloadedItems", QJsonArray{}}};
 		}
 		if (type == "ItemListRequest") {
-			QJsonArray inScene;
+			QJsonArray inScene, files;
 			for (const QString &id : items)
 				inScene << QJsonObject{{"instanceID", id}};
-			return {{"itemInstancesInScene", inScene}};
+			if (data.value("includeAvailableItemFiles").toBool() && seesItems && !itemsFolder.isEmpty())
+				for (const QString &folder : QDir(itemsFolder).entryList(QDir::Dirs | QDir::NoDotAndDotDot))
+					if (QDir(QDir(itemsFolder).filePath(folder)).entryList({"*.model3.json"}).size() == 1)
+						files << QJsonObject{{"fileName", folder}, {"type", "Live2D"}, {"loadedCount", 0}};
+			return {{"itemInstancesInScene", inScene}, {"availableItemFiles", files}};
 		}
 		ok = false;
 		return error(1, "unknown request");
@@ -362,6 +406,7 @@ bool upAndDown()
 		prop->setSize(0.9);
 		prop->retryMs = 5;
 		prop->tilt = [] { return 2.0; };
+		prop->live2d = false; // these are the picture's own ways; the Live2D item's are in live2dUpAndDown()
 		return prop;
 	};
 
@@ -489,6 +534,343 @@ bool upAndDown()
 	return tally.report("up and down", "checks as expected");
 }
 
+// ---- 7. the Live2D item ---------------------------------------------------------------------------------------------
+
+double distance(const QPointF &a, const QPointF &b)
+{
+	return std::hypot(a.x() - b.x(), a.y() - b.y());
+}
+
+// The sheet's middle line from top to bottom in 3D, put back together from where place() puts it and how near it
+// came: its length, which paper keeps whatever it does.
+double middleLength(const PaperPose &pose)
+{
+	double length = 0, lastY = 0, lastZ = 0;
+	for (int i = 0; i <= 400; i++) {
+		double depth = 0;
+		const QPointF at = place(0, kSheetHeight * i / 400.0, pose, &depth);
+		const double closer = 2.6 * kSheetHeight / (2.6 * kSheetHeight - depth);
+		const double y = (at.y() + kPinDown * kSheetHeight) / closer;
+		if (i)
+			length += std::hypot(y - lastY, depth - lastZ);
+		lastY = y;
+		lastZ = depth;
+	}
+	return length;
+}
+
+QJsonObject jsonFile(const PaperItem &item, const QString &suffix)
+{
+	for (const auto &[path, bytes] : item.files)
+		if (path.endsWith(suffix))
+			return QJsonDocument::fromJson(bytes).object();
+	return {};
+}
+
+bool item(double &paintMs, QByteArray &texture)
+{
+	Tally tally;
+
+	// The .moc3, as it reads back.
+	const QByteArray moc = paperMoc();
+	const moc3::Summary read = moc3::read(moc);
+	tally.expect(read.ok, "the .moc3 reads back" + (read.ok ? std::string() : ": " + read.why.toStdString()));
+	tally.expect(read.version == moc3::kVersion300 && moc.size() % 64 == 0 && moc.size() < 8 * 1024 * 1024,
+		     "version 3.00, a multiple of 64 bytes, under 8 MB");
+	const QStringList meshes{"PaperShadow", "PaperSheet", "PaperShadeDark", "PaperShadeLight"};
+	tally.expect(read.meshes == meshes, "its meshes, back to front: shadow, sheet, two shadings");
+	QStringList parameters;
+	for (const char *id : kTrackedParameters)
+		parameters << id;
+	parameters << kSwing << kCurl << kTwist << kRipple;
+	tally.expect(read.parameters == parameters, "its parameters: six tracked, four that bend it");
+	tally.expect(std::all_of(read.keyformCounts.begin(), read.keyformCounts.end(), [](int n) { return n == 7 * 5 * 5 * 3; }),
+		     "a keyform for every combination of the four's keys");
+	const QSize canvas = pictureSize();
+	tally.expect(read.canvas[3] == canvas.width() && read.canvas[4] == canvas.height() &&
+			     read.canvas[1] == canvas.width() / 2.0f && read.canvas[2] == canvas.height() / 2.0f,
+		     "the picture's size, its origin in the middle, where the picture's centre is pinned");
+	bool uvsInside = true;
+	for (const auto &uvs : read.uvs)
+		for (float uv : uvs)
+			uvsInside = uvsInside && uv >= 0 && uv <= 1;
+	tally.expect(uvsInside, "every UV on the texture");
+	tally.expect(moc3::write(moc3::Model{}).isEmpty(), "a model with nothing in it is not written");
+
+	// How it bends.
+	const double H = kSheetHeight, W = kSheetWidth, degree = 3.14159265358979323846 / 180;
+	tally.expect(distance(place(0, kPinDown * H, {}), {0, 0}) < 1e-6 &&
+			     distance(place(W / 2, H, {}), {W / 2, (1 - kPinDown) * H}) < 1e-6,
+		     "at rest, flat, the pin a third of the way down");
+	tally.expect(distance(place(0, H, {30, 0, 0, 0}), {-H * std::sin(30 * degree), H * std::cos(30 * degree) - kPinDown * H}) < 1e-6,
+		     "a swing turns it about the middle of its top edge, clockwise");
+	tally.expect(distance(place(-W / 2, 0, {0, 1, 1, 1}), place(-W / 2, 0, {})) < 1e-6 &&
+			     distance(place(W / 2, 0.05 * H, {0, -1, -1, -1}), place(W / 2, 0.05 * H, {})) < 1e-6,
+		     "its top edge stays as held, whatever it does below");
+	double toward = 0, away = 0;
+	place(0, H, {0, 1, 0, 0}, &toward);
+	place(0, H, {0, -1, 0, 0}, &away);
+	tally.expect(toward > 0.3 * H && away < -0.3 * H, "a curl brings the bottom toward the camera, or back");
+	tally.expect(place(0, H, {0, -1, 0, 0}).y() < place(0, H, {}).y() - 0.1 * H, "and so the sheet looks shorter");
+	bool keepsLength = true;
+	for (const PaperPose &pose : {PaperPose{0, 1, 0, 0}, PaperPose{0, -1, 0, 0}, PaperPose{0, 0.5, 0, 1},
+				      PaperPose{0, -1, 0, -1}})
+		keepsLength = keepsLength && std::abs(middleLength(pose) - H) < 0.002 * H;
+	tally.expect(keepsLength, "bent any way, it is as long as it was: paper bends, it does not stretch");
+	double right = 0, left = 0;
+	place(W / 2, H, {0, 0, 1, 0}, &right);
+	place(-W / 2, H, {0, 0, 1, 0}, &left);
+	tally.expect(right > 0.3 * W && left < -0.3 * W, "a twist brings one bottom corner forward and the other back");
+	bool finite = true;
+	for (double swing : {-45.0, 45.0})
+		for (double bend : {-1.0, 1.0}) {
+			const QPointF p = place(W / 2, H, {swing, bend, bend, bend});
+			finite = finite && std::isfinite(p.x()) && std::isfinite(p.y());
+		}
+	tally.expect(finite, "every extreme pose is somewhere");
+
+	// The texture: the sheet at 1:1, its shadow and shadings beside it, nothing else.
+	QElapsedTimer took;
+	took.start();
+	const QImage sheet = paintSheet(jobApplication(), 1026);
+	const QImage image = paperTexture(sheet);
+	texture = png(image);
+	paintMs = static_cast<double>(took.elapsed());
+	const QRectF at = sheetInTexture();
+	tally.expect(image.width() == kTextureSide && image.height() == kTextureSide, "2048 pixels square");
+	tally.expect(image.copy(at.toRect()) == sheet.convertToFormat(QImage::Format_ARGB32), "the sheet in it, unchanged");
+	tally.expect(qAlpha(image.pixel(kTextureSide - 4, kTextureSide - 4)) == 0 && qAlpha(image.pixel(4, kTextureSide - 4)) == 0,
+		     "transparent where nothing is");
+	const QImage filled = paperTexture(paintSheet(filledIn(), 1026));
+	const QRectF nameLine = QRectF(220, 215, 300, 46).translated(at.topLeft());
+	tally.expect(inked(filled, nameLine) > inked(image, nameLine) + 0.01, "what is written in, on the texture");
+
+	// The item's files.
+	const PaperItem blank = paperItem(texture), again = paperItem(texture), written = paperItem(png(filled));
+	static const QRegularExpression named(QStringLiteral("^SarxinaJobApplication-[0-9a-f]{10}$"));
+	tally.expect(named.match(blank.name).hasMatch(), "a folder name of its own: " + blank.name.toStdString());
+	tally.expect(blank.name == again.name && blank.name != written.name,
+		     "the same name for the same writing, a new one for new writing");
+	const QJsonObject model3 = jsonFile(blank, ".model3.json");
+	const QJsonObject references = model3.value("FileReferences").toObject();
+	const QStringList wanted{references.value("Moc").toString(), references.value("Physics").toString(),
+				 references.value("DisplayInfo").toString(),
+				 references.value("Textures").toArray().at(0).toString()};
+	bool present = true;
+	for (const QString &file : wanted)
+		present = present && std::any_of(blank.files.begin(), blank.files.end(),
+						 [&file](const auto &f) { return f.first == file && !f.second.isEmpty(); });
+	tally.expect(present && model3.value("Version").toInt() == 3, "every file the model names is there");
+	tally.expect(blank.files.back().first.endsWith(".vtube.json") &&
+			     blank.files[blank.files.size() - 2].first.endsWith(".model3.json"),
+		     "the files that make it an item written last");
+
+	const QJsonObject physics = jsonFile(blank, ".physics3.json");
+	const QJsonArray settings = physics.value("PhysicsSettings").toArray();
+	int inputs = 0, outputs = 0, vertices = 0;
+	bool known = true;
+	QStringList driven;
+	for (const QJsonValue &value : settings) {
+		const QJsonObject setting = value.toObject();
+		for (const QJsonValue &in : setting.value("Input").toArray())
+			known = known && parameters.contains(in.toObject().value("Source").toObject().value("Id").toString());
+		for (const QJsonValue &out : setting.value("Output").toArray()) {
+			driven << out.toObject().value("Destination").toObject().value("Id").toString();
+			known = known && out.toObject().value("VertexIndex").toInt() < setting.value("Vertices").toArray().size();
+		}
+		inputs += setting.value("Input").toArray().size();
+		outputs += setting.value("Output").toArray().size();
+		vertices += setting.value("Vertices").toArray().size();
+	}
+	const QJsonObject meta = physics.value("Meta").toObject();
+	tally.expect(meta.value("PhysicsSettingCount").toInt() == settings.size() &&
+			     meta.value("TotalInputCount").toInt() == inputs && meta.value("TotalOutputCount").toInt() == outputs &&
+			     meta.value("VertexCount").toInt() == vertices,
+		     "the physics' counts add up");
+	tally.expect(known && driven == QStringList({kSwing, kCurl, kTwist, kRipple}),
+		     "physics reads the item's own parameters and moves the four that bend it");
+
+	const QJsonObject vtube = jsonFile(blank, ".vtube.json");
+	QStringList mapped;
+	for (const QJsonValue &m : vtube.value("ParameterSettings").toArray())
+		mapped << m.toObject().value("Input").toString() + "->" + m.toObject().value("OutputLive2D").toString();
+	tally.expect(mapped == QStringList({"FaceAngleX->ParamAngleX", "FaceAngleY->ParamAngleY", "FaceAngleZ->ParamAngleZ",
+					    "FacePositionX->ParamBodyMoveX", "FacePositionY->ParamBodyMoveY",
+					    "FacePositionZ->ParamBodyMoveZ"}),
+		     "VTube Studio gives it the face's angles and movement");
+	const QJsonObject vtsPhysics = vtube.value("PhysicsSettings").toObject();
+	tally.expect(vtsPhysics.value("Use").toBool() && vtsPhysics.value("DraggingPhysicsStrength").toInt() > 0 &&
+			     vtube.value("FileReferences").toObject().value("Model").toString() == "JobApplication.model3.json",
+		     "physics on, dragging physics on, its model named");
+
+	// In a folder, and out again.
+	QTemporaryDir temp;
+	const QString items = QDir(temp.path()).filePath("VTube Studio_Data/StreamingAssets/Items");
+	QDir().mkpath(items);
+	QString why;
+	tally.expect(installItem(items, blank, why) && QFile::exists(QDir(items).filePath(blank.name + "/JobApplication.moc3")) &&
+			     QFile::exists(QDir(items).filePath(blank.name + "/JobApplication.2048/texture_00.png")),
+		     "written into the Items folder, texture and all");
+	tally.expect(!installItem(QDir(temp.path()).filePath("nowhere"), blank, why), "not into a folder that is not there");
+	QDir(items).mkpath("SarxinaJobApplication-notours1234");
+	QDir(items).mkpath("SarxinaJobApplication-0123456789"); // the right shape of name, but not written by this plugin
+	QDir(items).mkpath("Someone Else's Hat");
+	installItem(items, written, why);
+	tally.expect(removeOldItems(items, written.name) == 1 && !QDir(items).exists(blank.name) &&
+			     QDir(items).exists(written.name) && QDir(items).exists("SarxinaJobApplication-notours1234") &&
+			     QDir(items).exists("SarxinaJobApplication-0123456789") && QDir(items).exists("Someone Else's Hat"),
+		     "its older items taken out, never anything else");
+	QFile exe(QDir(temp.path()).filePath("VTube Studio.exe"));
+	const bool made = exe.open(QIODevice::WriteOnly);
+	exe.close();
+	tally.expect(made && QDir(itemsFolderBeside(exe.fileName(), "Items")) == QDir(items) &&
+			     itemsFolderBeside(exe.fileName(), "Elsewhere").isEmpty() &&
+			     itemsFolderBeside(QDir(temp.path()).filePath("Other.exe"), "Items").isEmpty(),
+		     "the Items folder found beside VTube Studio");
+	return tally.report("the Live2D item", "checks as expected");
+}
+
+bool live2dUpAndDown(const QByteArray &texture)
+{
+	Tally tally;
+	const QByteArray picture = png(QImage(64, 64, QImage::Format_ARGB32));
+	QTemporaryDir temp;
+	const QString items = QDir(temp.path()).filePath("Items");
+	const auto fresh = [&items] {
+		QDir(items).removeRecursively();
+		QDir().mkpath(items);
+	};
+	const auto make = [&](StandIn &vts) {
+		auto prop = std::make_unique<PaperProp>(vts.send());
+		prop->setPicture(picture);
+		prop->setTexture(texture);
+		prop->setSize(0.9);
+		prop->retryMs = 5;
+		prop->listRetryMs = 5;
+		prop->tilt = [] { return 2.0; };
+		prop->findItems = [&vts](const QString &name) { return name == "Items" ? vts.itemsFolder : QString(); };
+		return prop;
+	};
+
+	{
+		fresh();
+		StandIn vts;
+		vts.itemsFolder = items;
+		auto prop = make(vts);
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && prop->bends() && prop->pinnedTo() == "ChestLosangeMiddle",
+			     "up as the Live2D item, pinned to the chest");
+		tally.expect(joined(vts.sent) == "CurrentModel, ArtMeshList, VTSFolderInfo, ItemList, ItemLoad, ItemPin",
+			     "asked in order: " + joined(vts.sent).toStdString());
+		tally.expect(vts.lastLoad.value("fileName").toString() == prop->itemName() &&
+				     vts.lastLoad.value("customDataBase64").toString().isEmpty() && vts.lastSize == 0.9 &&
+				     QDir(items).exists(prop->itemName()),
+			     "loaded by the name of the folder written, nothing sent with it, at its size");
+		vts.sent.clear();
+		prop->toggle();
+		settle(*prop);
+		tally.expect(!prop->shown() && !prop->bends() && joined(vts.sent) == "ItemUnload", "down again");
+		vts.sent.clear();
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && prop->bends() && joined(vts.sent) == "CurrentModel, ItemList, ItemLoad, ItemPin",
+			     "up again, the folder's name remembered: " + joined(vts.sent).toStdString());
+
+		// The streamer changed the item's settings in VTube Studio, which keeps them in its vtube.json; OBS restarts.
+		const QString settings = QDir(items).filePath(prop->itemName() + "/JobApplication.vtube.json");
+		QFile changed(settings);
+		const bool wrote = changed.open(QIODevice::WriteOnly) && changed.write("{\"changed\": true}") > 0;
+		changed.close();
+		prop->toggle();
+		settle(*prop);
+		StandIn later;
+		later.itemsFolder = items;
+		auto restarted = make(later);
+		restarted->toggle();
+		settle(*restarted);
+		QByteArray kept;
+		if (QFile file(settings); file.open(QIODevice::ReadOnly))
+			kept = file.readAll(); // and closed, so that the folder can go later
+		tally.expect(wrote && restarted->bends() && kept.contains("changed"),
+			     "after a restart, the item VTube Studio has is used as it is, its settings kept");
+		restarted->toggle();
+		settle(*restarted);
+		prop->toggle();
+		settle(*prop);
+
+		// New writing: a new item; once it is up, the old one is gone from the folder.
+		const QString before = prop->itemName();
+		prop->toggle();
+		settle(*prop);
+		prop->setTexture(png(paperTexture(paintSheet(filledIn(), 1026))));
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && prop->bends() && prop->itemName() != before &&
+				     QDir(items).exists(prop->itemName()) && !QDir(items).exists(before),
+			     "new writing: a new item, the old one taken out of the folder");
+	}
+	{
+		StandIn vts; // no VTube Studio to be found where it runs
+		auto prop = make(vts);
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && !prop->bends() && !vts.lastLoad.value("customDataBase64").toString().isEmpty() &&
+				     joined(vts.sent) == "CurrentModel, ArtMeshList, VTSFolderInfo, ItemLoad, ItemPin",
+			     "no Items folder: up as the picture: " + joined(vts.sent).toStdString());
+	}
+	{
+		fresh();
+		StandIn vts;
+		vts.itemsFolder = items;
+		vts.seesItems = false; // it never lists the item
+		auto prop = make(vts);
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && !prop->bends() && vts.sent.count("ItemListRequest") == prop->listTries,
+			     "VTube Studio does not see the item: asked a few times, then the picture");
+	}
+	{
+		fresh();
+		StandIn vts;
+		vts.itemsFolder = items;
+		vts.refusesItems = 757;
+		auto prop = make(vts);
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && !prop->bends(), "VTube Studio will not load it: the picture");
+		prop->toggle();
+		settle(*prop);
+		vts.sent.clear();
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && !prop->bends() && joined(vts.sent) == "CurrentModel, ItemLoad, ItemPin",
+			     "and from then on the picture straight away: " + joined(vts.sent).toStdString());
+	}
+	{
+		fresh();
+		StandIn vts;
+		vts.itemsFolder = items;
+		vts.menusOpen = 2;
+		auto prop = make(vts);
+		prop->show();
+		settle(*prop);
+		tally.expect(prop->shown() && prop->bends() && vts.sent.count("ItemLoadRequest") == 3,
+			     "loads the item once VTube Studio's menus close");
+	}
+	{
+		fresh();
+		StandIn vts;
+		vts.itemsFolder = items;
+		auto prop = make(vts);
+		prop->live2d = false;
+		prop->toggle();
+		settle(*prop);
+		tally.expect(prop->shown() && !prop->bends() && QDir(items).isEmpty(), "told not to: the picture, nothing written");
+	}
+	return tally.report("up and down as a Live2D item", "checks as expected");
+}
+
 // ---- 6. chat --------------------------------------------------------------------------------------------------------
 
 bool chat()
@@ -524,6 +906,18 @@ void pictures(const char *folder, const QImage &picture, const QByteArray &file)
 	written += paintPicture(filledIn(), 1026).save(dir.filePath("jobapplication-filled.png"));
 	test::report(written == 3, "wrote %d pictures to %s (jobapplication-picture.png, %d x %d, is what VTube Studio gets)",
 		     written, folder, picture.width(), picture.height());
+
+	// The Live2D item as the plugin installs it, blank and filled in, for the preview to load.
+	for (const auto &[name, form] : {std::pair<const char *, Form>{"item-blank", jobApplication()},
+					 std::pair<const char *, Form>{"item-filled", filledIn()}}) {
+		QDir(dir.filePath(name)).removeRecursively();
+		dir.mkpath(name);
+		const PaperItem item = paperItem(png(paperTexture(paintSheet(form, 1026))));
+		QString why;
+		const bool ok = installItem(dir.filePath(name), item, why);
+		test::report(ok, "wrote the Live2D item %s to %s: %s", item.name.toUtf8().constData(), name,
+			     ok ? "OK" : why.toUtf8().constData());
+	}
 }
 
 } // namespace
@@ -540,6 +934,13 @@ bool runSelfTest(const char *picturesFolder)
 	passed = pins() && passed;
 	passed = requests(file) && passed;
 	passed = upAndDown() && passed;
+	double textureMs = 0;
+	QByteArray texture;
+	passed = item(textureMs, texture) && passed;
+	test::report(true, "the Live2D item: a %d x %d texture, %lld KB as a PNG, painted and packed in %.0f ms; the .moc3 %lld KB",
+		     kTextureSide, kTextureSide, static_cast<long long>(texture.size() / 1024), textureMs,
+		     static_cast<long long>(paperMoc().size() / 1024));
+	passed = live2dUpAndDown(texture) && passed;
 	passed = chat() && passed;
 	pictures(picturesFolder, picture, file);
 	test::report(passed, "%s", passed ? "passed" : "FAILED");
