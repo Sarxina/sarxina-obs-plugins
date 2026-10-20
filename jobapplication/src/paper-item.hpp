@@ -17,8 +17,10 @@
 // Paper bends but does not stretch: every pose keeps the sheet's own lengths (place() bends it in 3D and looks at it
 // from the front), and what is printed or written on it is the texture, so it stays as it is whatever the pose.
 //
-// What is written changes the texture, and so the folder's name (the texture's hash): VTube Studio loads a new item
-// for new writing, never a remembered old one.
+// What is written changes the texture and nothing else: the item keeps one folder, SarxinaJobApplication, and new
+// writing is a new texture in it. VTube Studio reads an item's files each time it loads one and keeps no copy of the
+// texture (tried 2026-10-20: a second copy of the item loaded while the first was up came up with the new writing, the
+// first kept the old), so loading it again shows what is written now.
 #pragma once
 
 #include "form.hpp"
@@ -67,10 +69,11 @@ QImage paperTexture(const QImage &sheet);
 
 // The files of the item, given its texture as a PNG.
 struct PaperItem {
-	QString name; // the folder, which is also the name VTube Studio loads it by
+	QString name; // the folder, which is also the name VTube Studio loads it by: always kItemName
 	std::vector<std::pair<QString, QByteArray>> files;
 };
-inline constexpr const char *kItemPrefix = "SarxinaJobApplication-";
+inline constexpr const char *kItemName = "SarxinaJobApplication";
+inline constexpr const char *kItemPrefix = "SarxinaJobApplication-"; // and 10 hex digits: 1.1.0 named one per writing
 inline constexpr const char *kItemBase = "JobApplication";
 PaperItem paperItem(const QByteArray &texturePng);
 
@@ -80,10 +83,13 @@ QByteArray paperMoc(); // made once
 QJsonObject paperPhysics();
 QJsonObject paperVtubeSettings(const QString &name, const QString &modelId);
 
-// Puts the item's folder in VTube Studio's Items folder, written whole before the model files that make VTube Studio
-// see it. False, and why, if it cannot.
-bool installItem(const QString &itemsFolder, const PaperItem &item, QString &why);
-// Takes this plugin's other paper items out of the Items folder (never anything else); how many.
+// Puts the item's folder in VTube Studio's Items folder, or brings the one there up to date: only the files that
+// differ are written, the model files that make VTube Studio see it last. Its VTube Studio settings (the .vtube.json)
+// are written only if there are none: VTube Studio keeps the streamer's changes to the item there. False, and why, if
+// it cannot; `wrote` says how many files were written.
+bool installItem(const QString &itemsFolder, const PaperItem &item, QString &why, int *wrote = nullptr);
+// Takes the plugin's older paper items out of the Items folder, the ones 1.1.0 wrote for each writing (never anything
+// else); how many.
 int removeOldItems(const QString &itemsFolder, const QString &keep);
 
 // VTube Studio's Items folder: next to the VTube Studio that is running, or where Steam installed it; empty if neither.

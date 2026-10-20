@@ -8,7 +8,10 @@
 //   5. Up and down with a stand-in for VTube Studio: the order of the requests, the ArtMesh asked for once per model,
 //      the permission box, menus that are open, toggles that come while it is busy, the paper taken away in VTube
 //      Studio, no model, no manager.
-//   6. The chat command.
+//   6. Chat: what it writes made safe to go on the paper (emoji and other scripts kept, nothing that would show as a
+//      box); !jobapp with a cooldown for each chatter, and redeems; the channel's rewards from Twitch in the settings,
+//      the button that makes one, redeems marked fulfilled; and the whole way: lines gathered and written together,
+//      the new paper up before the old one goes, a line bringing the paper up.
 //   7. The paper as a Live2D item: its .moc3 read back; how it bends (held at the top, turned about it, curled toward
 //      the camera or back, twisted, never stretched); its texture; its physics and VTube Studio settings; its folder
 //      written into and taken out of an Items folder; and up and down that way with the stand-in for VTube Studio,
@@ -19,6 +22,7 @@
 
 #include "chat-trigger.hpp"
 #include "form.hpp"
+#include "jobapplication.hpp"
 #include "moc3.hpp"
 #include "paper-item.hpp"
 #include "paper-prop.hpp"
@@ -33,6 +37,8 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QUrl>
+#include <QUrlQuery>
 
 #include <algorithm>
 #include <cmath>
@@ -86,7 +92,7 @@ bool form()
 	const std::vector<std::string> keys = blank.keys();
 	const std::set<std::string> unique(keys.begin(), keys.end());
 	tally.expect(unique.size() == keys.size(), "every field has its own key");
-	for (const char *named : {"name", "position", "experience", "why_hire"})
+	for (const char *named : {"name", "position", "experience", "signature"})
 		tally.expect(blank.field(named) != nullptr, std::string("a field for ") + named);
 	bool empty = true, labelled = true;
 	for (const Section &section : blank.sections) {
@@ -94,7 +100,7 @@ bool form()
 		for (const Row &row : section.rows)
 			for (const Field &field : row.fields) {
 				empty = empty && field.value.isEmpty();
-				if (field.kind != Field::Kind::Lines)
+				if (field.kind != Field::Kind::Lines && field.kind != Field::Kind::Bullets)
 					labelled = labelled && !field.label.isEmpty();
 			}
 	}
@@ -107,8 +113,8 @@ bool form()
 	tally.expect(filled.set("position", QChar(0x202E) + QStringLiteral("  Professional   Elf ")) &&
 			     filled.field("position")->value == "Professional Elf",
 		     "text made safe: no turning characters, spaces tidied");
-	filled.set("why_hire", QString(500, QLatin1Char('a')));
-	tally.expect(filled.field("why_hire")->value.size() == longestValue(*filled.field("why_hire")),
+	filled.set("position", QString(500, QLatin1Char('a')));
+	tally.expect(filled.field("position")->value.size() == longestValue(*filled.field("position")),
 		     "a long answer cut to what fits");
 	tally.expect(filled.set("hours", QStringLiteral("part TIME")) && filled.field("hours")->value == "Part time",
 		     "a choice ticked, in any case");
@@ -148,9 +154,8 @@ Form filledIn()
 	form.set("pay", QStringLiteral("$ 3 gold coins"));
 	form.set("start", QStringLiteral("Never"));
 	form.set("hours", QStringLiteral("Seasonal"));
-	form.set("experience", QStringLiteral("Librarian of the astral archive for 800 years. Once alphabetised a "
-					      "dragon. Can read in the dark"));
-	form.set("why_hire", QStringLiteral("I have glasses so I look smart and my chat said I should apply"));
+	form.field("experience")->bullets = {{QStringLiteral("Librarian of the astral archive for 800 years"), QStringLiteral("chat")},
+					     {QStringLiteral("Once alphabetised a dragon"), QStringLiteral("sleepybagel")}};
 	form.set("signature", QStringLiteral("Sarxina"));
 	return form;
 }
@@ -245,7 +250,7 @@ bool requests(const QByteArray &file)
 			       info.value("vertexWeight3").toDouble();
 	tally.expect(std::abs(weights - 1) < 1e-9, "weights adding up to 1");
 
-	const QJsonObject unload = unloadRequest("item-1");
+	const QJsonObject unload = unloadRequest({QStringLiteral("item-1")});
 	tally.expect(unload.value("instanceIDs").toArray() == QJsonArray{"item-1"} &&
 			     !unload.value("unloadAllLoadedByThisPlugin").toBool(true) &&
 			     !unload.value("unloadAllInScene").toBool(true),
@@ -356,7 +361,9 @@ struct StandIn {
 			return {{"instanceID", id}, {"fileName", data.value("fileName")}};
 		}
 		if (type == "ItemPinRequest")
-			return {{"isPinned", true}, {"itemInstanceID", data.value("itemInstanceID")}};
+			return {{"isPinned", data.value("pin").toBool()}, {"itemInstanceID", data.value("itemInstanceID")}};
+		if (type == "ItemMoveRequest")
+			return {{"movedItems", QJsonArray{QJsonObject{{"success", true}, {"errorID", -1}}}}};
 		if (type == "ItemUnloadRequest") {
 			for (const QJsonValue &id : data.value("instanceIDs").toArray())
 				items.erase(id.toString());
@@ -405,6 +412,7 @@ bool upAndDown()
 		prop->setPicture(picture);
 		prop->setSize(0.9);
 		prop->retryMs = 5;
+		prop->menusRetryMs = 5;
 		prop->tilt = [] { return 2.0; };
 		prop->live2d = false; // these are the picture's own ways; the Live2D item's are in live2dUpAndDown()
 		return prop;
@@ -476,13 +484,32 @@ bool upAndDown()
 		tally.expect(prop->shown() && vts.sent.count("ItemLoadRequest") == 4, "loads once VTube Studio's menus close");
 	}
 	{
+		// A popup VTube Studio keeps open (its start-up notices, its first-time tips): no giving up while the paper is
+		// wanted, and nothing more once it is not.
 		StandIn vts;
-		vts.menusOpen = 1000;
+		vts.menusOpen = 1000000;
 		auto prop = make(vts);
 		prop->retries = 5;
 		prop->show();
+		QElapsedTimer waited;
+		waited.start();
+		while (waited.elapsed() < 400)
+			QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+		const qsizetype tried = vts.sent.count("ItemLoadRequest");
+		tally.expect(prop->wanted() && prop->busy() && tried > prop->retries,
+			     "keeps waiting for a popup to close, past the retries a permission gets");
+		prop->hide();
 		settle(*prop);
-		tally.expect(!prop->shown() && !prop->wanted() && !prop->busy(), "gives up when they never close");
+		const qsizetype after = vts.sent.count("ItemLoadRequest");
+		waited.restart();
+		while (waited.elapsed() < 100)
+			QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+		tally.expect(!prop->shown() && !prop->busy() && vts.sent.count("ItemLoadRequest") == after,
+			     "and stops once the paper is taken back");
+		vts.menusOpen = 0;
+		prop->show();
+		settle(*prop);
+		tally.expect(prop->shown(), "and comes up the next time, once it is closed");
 	}
 	{
 		StandIn vts;
@@ -647,10 +674,11 @@ bool item(double &paintMs, QByteArray &texture)
 
 	// The item's files.
 	const PaperItem blank = paperItem(texture), again = paperItem(texture), written = paperItem(png(filled));
-	static const QRegularExpression named(QStringLiteral("^SarxinaJobApplication-[0-9a-f]{10}$"));
-	tally.expect(named.match(blank.name).hasMatch(), "a folder name of its own: " + blank.name.toStdString());
-	tally.expect(blank.name == again.name && blank.name != written.name,
-		     "the same name for the same writing, a new one for new writing");
+	tally.expect(blank.name == "SarxinaJobApplication" && again.name == blank.name && written.name == blank.name,
+		     "one folder name, whatever is written: " + blank.name.toStdString());
+	tally.expect(blank.files == again.files && blank.files.front().second != written.files.front().second &&
+			     jsonFile(blank, ".vtube.json") == jsonFile(written, ".vtube.json"),
+		     "the same files for the same writing; new writing, a new texture, the same settings");
 	const QJsonObject model3 = jsonFile(blank, ".model3.json");
 	const QJsonObject references = model3.value("FileReferences").toObject();
 	const QStringList wanted{references.value("Moc").toString(), references.value("Physics").toString(),
@@ -712,14 +740,33 @@ bool item(double &paintMs, QByteArray &texture)
 			     QFile::exists(QDir(items).filePath(blank.name + "/JobApplication.2048/texture_00.png")),
 		     "written into the Items folder, texture and all");
 	tally.expect(!installItem(QDir(temp.path()).filePath("nowhere"), blank, why), "not into a folder that is not there");
+	// The streamer changes the item's settings in VTube Studio; then new writing.
+	const QString itemSettings = QDir(items).filePath(blank.name + "/JobApplication.vtube.json");
+	if (QFile file(itemSettings); file.open(QIODevice::WriteOnly))
+		file.write("{\"changed\": true}");
+	int wrote = 0;
+	installItem(items, written, why, &wrote);
+	QByteArray onDisk, settingsNow;
+	if (QFile file(QDir(items).filePath(blank.name + "/JobApplication.2048/texture_00.png")); file.open(QIODevice::ReadOnly))
+		onDisk = file.readAll();
+	if (QFile file(itemSettings); file.open(QIODevice::ReadOnly))
+		settingsNow = file.readAll();
+	tally.expect(onDisk == written.files.front().second && settingsNow.contains("changed") && wrote == 2,
+		     "new writing: the new texture and icon written in, the streamer's settings kept (" +
+			     std::to_string(wrote) + " files)");
+	// What 1.1.0 left: a folder for each writing.
+	for (const char *old : {"SarxinaJobApplication-0a48869aa0", "SarxinaJobApplication-0123456789"}) {
+		QDir(items).mkpath(old);
+		if (QString(old).endsWith("aa0"))
+			if (QFile file(QDir(items).filePath(QString(old) + "/JobApplication.vtube.json")); file.open(QIODevice::WriteOnly))
+				file.write("{}");
+	}
 	QDir(items).mkpath("SarxinaJobApplication-notours1234");
-	QDir(items).mkpath("SarxinaJobApplication-0123456789"); // the right shape of name, but not written by this plugin
 	QDir(items).mkpath("Someone Else's Hat");
-	installItem(items, written, why);
-	tally.expect(removeOldItems(items, written.name) == 1 && !QDir(items).exists(blank.name) &&
+	tally.expect(removeOldItems(items, written.name) == 1 && !QDir(items).exists("SarxinaJobApplication-0a48869aa0") &&
 			     QDir(items).exists(written.name) && QDir(items).exists("SarxinaJobApplication-notours1234") &&
 			     QDir(items).exists("SarxinaJobApplication-0123456789") && QDir(items).exists("Someone Else's Hat"),
-		     "its older items taken out, never anything else");
+		     "the ones 1.1.0 wrote taken out, never anything else");
 	QFile exe(QDir(temp.path()).filePath("VTube Studio.exe"));
 	const bool made = exe.open(QIODevice::WriteOnly);
 	exe.close();
@@ -746,7 +793,9 @@ bool live2dUpAndDown(const QByteArray &texture)
 		prop->setTexture(texture);
 		prop->setSize(0.9);
 		prop->retryMs = 5;
+		prop->menusRetryMs = 5;
 		prop->listRetryMs = 5;
+		prop->settleMs = 20;
 		prop->tilt = [] { return 2.0; };
 		prop->findItems = [&vts](const QString &name) { return name == "Items" ? vts.itemsFolder : QString(); };
 		return prop;
@@ -764,7 +813,8 @@ bool live2dUpAndDown(const QByteArray &texture)
 		tally.expect(joined(vts.sent) == "CurrentModel, ArtMeshList, VTSFolderInfo, ItemList, ItemLoad, ItemPin",
 			     "asked in order: " + joined(vts.sent).toStdString());
 		tally.expect(vts.lastLoad.value("fileName").toString() == prop->itemName() &&
-				     vts.lastLoad.value("customDataBase64").toString().isEmpty() && vts.lastSize == 0.9 &&
+				     vts.lastLoad.value("customDataBase64").toString().isEmpty() &&
+				     std::abs(vts.lastSize - 0.9 * kItemScale) < 1e-9 &&
 				     QDir(items).exists(prop->itemName()),
 			     "loaded by the name of the folder written, nothing sent with it, at its size");
 		vts.sent.clear();
@@ -799,16 +849,20 @@ bool live2dUpAndDown(const QByteArray &texture)
 		prop->toggle();
 		settle(*prop);
 
-		// New writing: a new item; once it is up, the old one is gone from the folder.
+		// New writing: the same item, with the new texture in its folder.
 		const QString before = prop->itemName();
 		prop->toggle();
 		settle(*prop);
-		prop->setTexture(png(paperTexture(paintSheet(filledIn(), 1026))));
+		const QByteArray newer = png(paperTexture(paintSheet(filledIn(), 1026)));
+		prop->setTexture(newer);
 		prop->toggle();
 		settle(*prop);
-		tally.expect(prop->shown() && prop->bends() && prop->itemName() != before &&
-				     QDir(items).exists(prop->itemName()) && !QDir(items).exists(before),
-			     "new writing: a new item, the old one taken out of the folder");
+		QByteArray onDisk;
+		if (QFile file(QDir(items).filePath(before + "/JobApplication.2048/texture_00.png")); file.open(QIODevice::ReadOnly))
+			onDisk = file.readAll();
+		tally.expect(prop->shown() && prop->bends() && prop->itemName() == before && onDisk == newer &&
+				     QDir(items).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1,
+			     "new writing: the same item, its new texture in its folder");
 	}
 	{
 		StandIn vts; // no VTube Studio to be found where it runs
@@ -873,23 +927,352 @@ bool live2dUpAndDown(const QByteArray &texture)
 
 // ---- 6. chat --------------------------------------------------------------------------------------------------------
 
+// A chat message as the manager hands one over.
+struct Said {
+	std::string text, reward, display = "Viewer", user = "viewer";
+	sarxina_chat_message view() const
+	{
+		sarxina_chat_message m{};
+		m.platform = "twitch";
+		m.id = "id";
+		m.user_id = user.c_str();
+		m.user_name = user.c_str();
+		m.display_name = display.c_str();
+		m.text = text.c_str();
+		m.reward_id = reward.c_str();
+		return m;
+	}
+};
+
+// What goes on the paper: made safe, kept whole, nothing that would show as a box.
+bool text()
+{
+	Tally tally;
+	const auto u = [](const char *utf8) { return QString::fromUtf8(utf8); };
+	tally.expect(writable(u("professional elf"), 60) == u("professional elf"), "plain words as they are");
+	tally.expect(writable(u("\xE2\x80\xAE" "evil\x07  text\n"), 60) == u("evil text"),
+		     "turning and control characters out, spaces tidied");
+	tally.expect(writable(u("barista \xE2\x98\x95 at a \xF0\x9F\x90\x89 caf\xC3\xA9"), 60) ==
+			     u("barista \xE2\x98\x95 at a \xF0\x9F\x90\x89 caf\xC3\xA9"),
+		     "emoji and accents kept");
+	const QString coder = u("\xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB coder"); // woman, joiner, laptop
+	tally.expect(writable(coder, 60) == coder, "an emoji joined from two stays one");
+	tally.expect(writable(u("a\xE2\x80\x8D" "b"), 60) == u("ab"), "a joiner outside an emoji goes");
+	for (const char *script : {"\xE5\x85\x83\xE6\xB0\x97\xE3\x81\xAA\xE3\x82\xA8\xE3\x83\xAB\xE3\x83\x95", // Japanese
+				   "\xEC\x97\x98\xED\x94\x84",                                         // Korean
+				   "\xE0\xA4\x8F\xE0\xA4\xB2\xE0\xA5\x8D\xE0\xA4\xAB",                 // Hindi
+				   "\xD0\xB5\xD0\xBB\xD1\x8C\xD1\x84"})                                // Russian
+		tally.expect(writable(u(script), 60) == u(script), std::string("kept, in a font that has it: ") + script);
+	tally.expect(writable(u("job\xE2\xBF\xA0\xCD\xB8!"), 60) == u("job!"), "characters no font has: out");
+	const QString cut = writable(QString(70, QLatin1Char('a')), 60);
+	tally.expect(cut.size() == 60 && cut.endsWith(QChar(0x2026)), "cut to 60 with ...");
+	QString thumbs;
+	for (int i = 0; i < 70; i++)
+		thumbs += u("\xF0\x9F\x91\x8D\xF0\x9F\x8F\xBD"); // a thumb, with a skin tone
+	const QString cutThumbs = writable(thumbs, 60);
+	tally.expect(cutThumbs.size() == 59 * 4 + 1 && cutThumbs.endsWith(QChar(0x2026)), "cut between whole emoji");
+	tally.expect(writable(u("\xCD\xB8\x07"), 60).isEmpty(), "nothing writable: nothing");
+	return tally.report("what chat writes", "checks as expected");
+}
+
 bool chat()
 {
 	Tally tally;
-	ChatTrigger trigger("apply");
-	sarxina_chat_message message{};
-	message.display_name = "Viewer";
-	message.user_name = "viewer";
-	message.reward_id = "";
-	QString who;
-	message.text = "!apply";
-	tally.expect(trigger.hear(message, 0, true, who) && who == "Viewer", "!apply");
-	tally.expect(!trigger.hear(message, 4000, true, who), "again 4 s later, cooling down");
-	message.text = "!Apply now";
-	tally.expect(trigger.hear(message, 10000, true, who), "once cooled down");
-	message.text = "!apply";
-	tally.expect(!trigger.hear(message, 30000, false, who), "not while it cannot go");
+	Heard heard;
+	const auto hear = [&heard](ChatTrigger &trigger, const Said &said, double ms) {
+		const sarxina_chat_message m = said.view();
+		return trigger.hear(m, ms, true, heard);
+	};
+
+	ChatTrigger command("jobapp", TriggerSettings::Trigger::Command, true);
+	tally.expect(hear(command, {"!jobapp professional elf", "", "Ada", "ada"}, 0) && heard.who == "Ada" &&
+			     heard.text == "professional elf" && heard.rewardId.empty(),
+		     "!jobapp and what follows it, from whom");
+	tally.expect(!hear(command, {"!jobapp again", "", "Ada", "ada"}, 4000), "the same chatter, cooling down");
+	tally.expect(hear(command, {"!JobApp me too", "", "Bo", "bo"}, 4000) && heard.text == "me too",
+		     "another chatter meanwhile: the cooldown is each chatter's own");
+	tally.expect(hear(command, {"!jobapp later", "", "Ada", "ada"}, 10001), "the first, once cooled down");
+	tally.expect(hear(command, {"!jobapp", "", "Cy", "cy"}, 0) && heard.text.isEmpty(), "!jobapp alone: nothing to write");
+	tally.expect(!hear(command, {"!jobapply x", "", "Di", "di"}, 0), "not the command");
+
+	ChatTrigger reward("jobapp", TriggerSettings::Trigger::Reward, true);
+	TriggerSettings settings = reward.settings();
+	tally.expect(settings.trigger == TriggerSettings::Trigger::Reward && settings.command == "jobapp",
+		     "a reward, with !jobapp behind the gear");
+	settings.rewardId = "r1";
+	reward.setSettings(settings);
+	tally.expect(hear(reward, {"  streamed to 3 viewers ", "r1", "Ada", "ada"}, 0) &&
+			     heard.text == "streamed to 3 viewers" && heard.rewardId == "r1" && heard.userId == "ada",
+		     "a redeem: what the viewer typed, the reward and who");
+	tally.expect(hear(reward, {"again", "r1", "Ada", "ada"}, 100), "redeems are never held back here (Twitch's cooldown is)");
+	tally.expect(!hear(reward, {"!jobapp x", "", "Bo", "bo"}, 0) && !hear(reward, {"x", "r2", "Bo", "bo"}, 0),
+		     "the command and other rewards: nothing");
 	return tally.report("chat", "checks as expected");
+}
+
+// Twitch's API, as the manager offers it, with Twitch's own answers (the shapes in its reference).
+struct StandInTwitch {
+	struct Request {
+		QString method, path;
+		QJsonObject body;
+	};
+	std::vector<Request> sent;
+	bool reachable = true;
+	bool affiliate = true;
+	struct Redemption {
+		std::string id, reward, user;
+		QString input;
+	};
+	std::vector<Redemption> waiting; // UNFULFILLED
+	int made = 0;
+
+	TwitchSend send()
+	{
+		return [this](const char *method, const QString &path, const QByteArray &body, TwitchAnswer done) {
+			if (!reachable)
+				return false;
+			sent.push_back({QString::fromLatin1(method), path, QJsonDocument::fromJson(body).object()});
+			int status = 200;
+			const QJsonObject answer = reply(sent.back(), status);
+			QTimer::singleShot(0, [done, status, answer] { done(status, answer); });
+			return true;
+		};
+	}
+
+	static QJsonObject reward(const char *id, const char *title, bool input)
+	{
+		return {{"broadcaster_id", "274637212"}, {"id", id}, {"title", title}, {"prompt", ""}, {"cost", 300},
+			{"is_enabled", true}, {"is_user_input_required", input}, {"is_paused", false}};
+	}
+
+	QJsonObject reply(const Request &request, int &status)
+	{
+		const QUrlQuery query(QUrl(QStringLiteral("http://x") + request.path).query());
+		if (request.method == "GET" && request.path.startsWith("/channel_points/custom_rewards/redemptions")) {
+			QJsonArray data;
+			for (const Redemption &r : waiting)
+				if (query.queryItemValue("reward_id").toStdString() == r.reward)
+					data << QJsonObject{{"id", QString::fromStdString(r.id)},
+							    {"user_id", QString::fromStdString(r.user)},
+							    {"user_input", r.input},
+							    {"status", "UNFULFILLED"}};
+			return {{"data", data}};
+		}
+		if (request.method == "PATCH") {
+			const std::string id = query.queryItemValue("id").toStdString();
+			const auto at = std::find_if(waiting.begin(), waiting.end(), [&id](const Redemption &r) { return r.id == id; });
+			if (at == waiting.end() || request.body.value("status").toString() != "FULFILLED") {
+				status = 404;
+				return {{"error", "Not Found"}, {"status", 404}, {"message", "redemption not found"}};
+			}
+			waiting.erase(at);
+			return {{"data", QJsonArray{QJsonObject{{"status", "FULFILLED"}}}}};
+		}
+		if (request.method == "POST") {
+			if (!affiliate) {
+				status = 403;
+				return {{"error", "Forbidden"}, {"status", 403},
+					{"message", "The broadcaster must have partner or affiliate status."}};
+			}
+			made++;
+			return {{"data", QJsonArray{reward("r-new", request.body.value("title").toString().toUtf8().constData(), true)}}};
+		}
+		if (request.path.contains("only_manageable_rewards=true"))
+			return {{"data", QJsonArray{reward("r-made", "Add to my job application", true)}}};
+		return {{"data", QJsonArray{reward("r-made", "Add to my job application", true), reward("r-hydrate", "Hydrate", false)}}};
+	}
+
+	int count(const char *method) const
+	{
+		return static_cast<int>(std::count_if(sent.begin(), sent.end(), [method](const Request &r) { return r.method == method; }));
+	}
+};
+
+void pass(int ms)
+{
+	QElapsedTimer waited;
+	waited.start();
+	while (waited.elapsed() < ms)
+		QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+}
+
+// The channel's rewards in the settings, the button that makes one, and redeems marked fulfilled.
+bool rewards()
+{
+	Tally tally;
+	StandInTwitch twitch;
+	ChatTrigger trigger("jobapp", TriggerSettings::Trigger::Reward, true);
+	trigger.twitch = twitch.send();
+	int changed = 0;
+	trigger.changed = [&changed] { changed++; };
+
+	trigger.listRewards(true);
+	pass(30);
+	tally.expect(trigger.listed() && trigger.channelRewards().size() == 2 && changed == 1,
+		     "the channel's rewards, from Twitch");
+	const auto made = [&trigger](const char *id) {
+		for (const ChannelReward &r : trigger.channelRewards())
+			if (r.id == id)
+				return r.made;
+		return false;
+	};
+	tally.expect(made("r-made") && !made("r-hydrate"), "the one the manager made, known");
+	trigger.listRewards();
+	pass(30);
+	tally.expect(twitch.count("GET") == 2, "not asked again a moment later");
+
+	obs_properties_t *properties = obs_properties_create();
+	addTriggerProperties(properties, trigger, false);
+	obs_property_t *list = obs_properties_get(properties, "reward");
+	QStringList offered;
+	for (size_t i = 0; list && i < obs_property_list_item_count(list); i++)
+		offered << QString::fromUtf8(obs_property_list_item_name(list, i));
+	tally.expect(offered.size() == 3 && offered[1] == "Add to my job application" && offered[2].startsWith("Hydrate (asks"),
+		     "offered in the settings, a reward without text marked: " + offered.join(" | ").toStdString());
+	obs_property_t *button = obs_properties_get(properties, "reward_create");
+	tally.expect(button && obs_property_get_type(button) == OBS_PROPERTY_BUTTON, "a button to make one");
+
+	// The button, pressed the way the manager presses it.
+	TriggerSettings before = trigger.settings();
+	before.cooldownSeconds = 15;
+	trigger.setSettings(before);
+	obs_property_button_clicked(button, nullptr);
+	pass(30);
+	const QJsonObject body = twitch.sent.empty() ? QJsonObject() : twitch.sent[2].body;
+	tally.expect(twitch.made == 1 && body.value("is_user_input_required").toBool() &&
+			     body.value("is_global_cooldown_enabled").toBool() && body.value("global_cooldown_seconds").toInt() == 15 &&
+			     body.value("title").toString() == "Add to my job application" && !body.value("prompt").toString().isEmpty(),
+		     "made a reward that asks for text, with the cooldown, its title and prompt");
+	tally.expect(trigger.settings().rewardId == "r-new" && trigger.settings().trigger == TriggerSettings::Trigger::Reward &&
+			     trigger.status().contains("Add to my job application"),
+		     "and picked it, and said so");
+	obs_properties_destroy(properties);
+
+	twitch.affiliate = false;
+	trigger.createReward();
+	pass(30);
+	tally.expect(trigger.status() == "The broadcaster must have partner or affiliate status." &&
+			     trigger.settings().rewardId == "r-new",
+		     "a channel that cannot have rewards: Twitch's words, nothing changed");
+
+	// Fulfilled: only redeems of the reward the manager made, one mark for each.
+	trigger.listRewards(true);
+	pass(30);
+	twitch.waiting = {{"red-1", "r-made", "ada", "professional elf"}, {"red-2", "r-made", "ada", "professional elf"},
+			  {"red-3", "r-hydrate", "bo", "water"}};
+	trigger.fulfil({"Ada", "professional elf", "ada", "r-made"});
+	pass(30);
+	tally.expect(twitch.waiting.size() == 2 && twitch.waiting[0].id == "red-2", "a redeem of its reward: marked, once");
+	const int patches = twitch.count("PATCH");
+	trigger.fulfil({"Bo", "water", "bo", "r-hydrate"});
+	pass(30);
+	tally.expect(twitch.count("PATCH") == patches, "another reward's: left alone");
+
+	StandInTwitch none;
+	none.reachable = false;
+	ChatTrigger alone("jobapp", TriggerSettings::Trigger::Reward, true);
+	alone.twitch = none.send();
+	alone.listRewards(true);
+	tally.expect(!alone.listed() && !alone.status().isEmpty(), "no manager with Twitch: says how to connect it");
+	return tally.report("rewards", "checks as expected");
+}
+
+// Chat writing on the paper, the whole way: lines gathered and written together, the paper up the whole time.
+bool writing(const QByteArray &)
+{
+	Tally tally;
+	QTemporaryDir temp;
+	const QString items = QDir(temp.path()).filePath("Items");
+	QDir().mkpath(items);
+	StandIn vts;
+	vts.itemsFolder = items;
+	StandInTwitch twitch;
+	JobApplication app(vts.send());
+	app.runForTest(20, 150);
+	PaperProp &prop = app.prop();
+	prop.retryMs = prop.menusRetryMs = prop.listRetryMs = 5;
+	prop.settleMs = 60;
+	prop.tilt = [] { return 2.0; };
+	prop.findItems = [&vts](const QString &name) { return name == "Items" ? vts.itemsFolder : QString(); };
+	app.trigger().twitch = twitch.send();
+	app.trigger().listRewards(true);
+	TriggerSettings settings = app.settings();
+	settings.rewardId = "r-made";
+	app.trigger().setSettings(settings);
+
+	const auto settleApp = [&app, &prop] {
+		QElapsedTimer waited;
+		waited.start();
+		int quiet = 0;
+		while (waited.elapsed() < 8000 && quiet < 10) {
+			QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+			quiet = prop.busy() || app.writingSoon() ? 0 : quiet + 1;
+		}
+	};
+	int redeemed = 0;
+	const auto redeem = [&](const std::string &who, const std::string &what) {
+		const Said said{what, "r-made", who, who};
+		twitch.waiting.push_back({"red-" + std::to_string(++redeemed), "r-made", who, QString::fromStdString(what)});
+		const sarxina_chat_message m = said.view();
+		app.chat(m);
+	};
+
+	redeem("sleepybagel", "professional elf");
+	settleApp();
+	const Field *experience = app.form().field("experience");
+	tally.expect(prop.shown() && prop.bends() && vts.items.size() == 1, "a redeem brings the paper up");
+	tally.expect(experience && experience->bullets.size() == 1 && experience->bullets[0].text == "professional elf" &&
+			     experience->bullets[0].by == "sleepybagel" && app.form().field("name")->value == "Chat",
+		     "with its line and who wrote it, under the name Chat");
+	tally.expect(twitch.waiting.empty(), "and the redeem marked fulfilled once it is on the paper");
+
+	const int painted = app.painted();
+	int fewestUp = 1000;
+	vts.sent.clear();
+	for (int i = 0; i < 20; i++)
+		redeem("viewer" + std::to_string(i), "line " + std::to_string(i));
+	QElapsedTimer waited;
+	waited.start();
+	while (waited.elapsed() < 8000 && (prop.busy() || app.writingSoon() || waited.elapsed() < 50)) {
+		QCoreApplication::processEvents(QEventLoop::AllEvents, 1);
+		fewestUp = std::min(fewestUp, static_cast<int>(vts.items.size()));
+	}
+	pass(50); // Twitch's answers to the marking
+	tally.expect(app.painted() == painted + 1 && vts.sent.count("ItemLoadRequest") == 1,
+		     "20 redeems at once: written once, loaded once (" + std::to_string(app.painted() - painted) + " paintings)");
+	tally.expect(fewestUp >= 1 && vts.items.size() == 1, "the paper up the whole time, one left after");
+	tally.expect(joined(vts.sent) == "ItemList, ItemLoad, ItemPin, ItemPin, ItemMove, ItemUnload",
+		     "the new one loaded and pinned, then the old one unpinned, moved off the picture and taken down: " +
+			     joined(vts.sent).toStdString());
+	tally.expect(vts.lastLoad.value("order").toInt() == kOrder - 1, "the new one just behind the old one");
+	tally.expect(experience->bullets.size() == 21 && experience->bullets[0].text == "line 19" &&
+			     experience->bullets[20].text == "professional elf",
+		     "every line kept, the newest first");
+	tally.expect(twitch.waiting.empty(), "every redeem marked fulfilled");
+	tally.expect(QDir(items).entryList(QDir::Dirs | QDir::NoDotAndDotDot).size() == 1, "one item left in the folder");
+
+	const size_t lines = app.entries();
+	redeem("nobody", "\xCD\xB8");
+	settleApp();
+	tally.expect(app.entries() == lines, "a redeem with nothing writable: no line");
+
+	settings.trigger = TriggerSettings::Trigger::Command;
+	app.trigger().setSettings(settings);
+	const Said first{"!jobapp lost to the tutorial boss", "", "ada", "ada"}, again{"!jobapp twice", "", "ada", "ada"};
+	app.chat(first.view());
+	app.chat(again.view());
+	settleApp();
+	tally.expect(app.entries() == lines + 1 && experience->bullets[0].text == "lost to the tutorial boss",
+		     "!jobapp writes a line; the same chatter again at once does not");
+
+	app.toggle(QStringLiteral("the self-test"));
+	settleApp();
+	tally.expect(!prop.shown() && vts.items.empty(), "the hotkey takes it down");
+	const Said down{"!jobapp unpaid intern", "", "bo", "bo"};
+	app.chat(down.view());
+	settleApp();
+	tally.expect(prop.shown() && experience->bullets[0].text == "unpaid intern", "a line while it is down brings it up");
+	return tally.report("writing on the paper", "checks as expected");
 }
 
 void pictures(const char *folder, const QImage &picture, const QByteArray &file)
@@ -941,7 +1324,10 @@ bool runSelfTest(const char *picturesFolder)
 		     kTextureSide, kTextureSide, static_cast<long long>(texture.size() / 1024), textureMs,
 		     static_cast<long long>(paperMoc().size() / 1024));
 	passed = live2dUpAndDown(texture) && passed;
+	passed = text() && passed;
 	passed = chat() && passed;
+	passed = rewards() && passed;
+	passed = writing(texture) && passed;
 	pictures(picturesFolder, picture, file);
 	test::report(passed, "%s", passed ? "passed" : "FAILED");
 	return passed;

@@ -62,6 +62,7 @@ void obs_module_post_load(void)
 		obs_frontend_add_save_callback(onSave, nullptr);
 	}
 	plugin->start();
+	sarxina::jobapplication::addTestRoute(*plugin);
 }
 
 void obs_module_unload(void)

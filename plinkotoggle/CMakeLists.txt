@@ -4,7 +4,7 @@
 sarxina_add_obs_module(
   plinkotoggle
   TITLE PlinkoToggle
-  VERSION 1.0.0
+  VERSION 1.1.0
   DESCRIPTION "PlinkoToggle source for OBS Studio"
   SOURCES
     src/resources.qrc

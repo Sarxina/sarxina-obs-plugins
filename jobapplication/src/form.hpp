@@ -1,6 +1,10 @@
-// The job application as a form: its title, its sections, and in them the fields that will be filled in. Every field
-// has a key, the name chat will use for it ("name", "position", "experience", "why_hire", ...), and a value that is
-// empty until something writes in it. The words printed on it are the plugin's strings (Form.* in en-US.ini).
+// The job application as a form: its title, its sections, and in them the fields that can be filled in. Every field
+// has a key ("name", "experience", "position", ...) and a value that is empty until something writes in it. The
+// words printed on it are the plugin's strings (Form.* in en-US.ini).
+//
+// Chat fills in the Experience section, the body of the form, right under the applicant's name: a bullet for each
+// line, the newest first, as the form asks. It is near the top of the sheet on purpose: pinned to the chest, the
+// lower half of the sheet is often below the bottom of the streamer's picture.
 //
 // paper.hpp paints it. Filling a field and painting again is all it takes to show what was written.
 #pragma once
@@ -13,19 +17,27 @@
 
 namespace sarxina::jobapplication {
 
+// An entry in a Bullets field: what was written, and who wrote it.
+struct Bullet {
+	QString text;
+	QString by;
+};
+
 struct Field {
 	enum class Kind {
 		Line,   // a label and a line to write on, as wide as its share of the row
 		Lines,  // ruled lines across the whole row, under the section's heading
 		Choice, // a label and a box for each option; the value is the option ticked
+		Bullets, // ruled lines across the whole row, a bullet on them for each entry, the newest first
 	};
 	std::string key;
 	Kind kind = Kind::Line;
 	QString label;
 	double share = 1; // of the row's width
-	int lines = 1;    // Lines: how many
+	int lines = 1;    // Lines and Bullets: how many ruled lines
 	QStringList options;
 	QString value;
+	std::vector<Bullet> bullets; // Bullets: the newest first; the ones that do not fit are not drawn
 };
 
 struct Row {
@@ -56,6 +68,7 @@ struct Form {
 };
 
 // The blank job application.
+inline constexpr int kExperienceLines = 8;
 Form jobApplication();
 
 // How long a value may be, in characters.

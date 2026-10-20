@@ -482,15 +482,14 @@ PaperItem paperItem(const QByteArray &texturePng)
 	const QByteArray moc = paperMoc();
 	const QByteArray physics = json(paperPhysics());
 
-	// The name: what is written (the texture) and how it moves (the model and physics), as a hash.
+	// One name whatever is written; its model ID says how it moves (the model and physics).
 	QCryptographicHash hash(QCryptographicHash::Sha256);
-	hash.addData(texturePng);
 	hash.addData(moc);
 	hash.addData(physics);
 	const QByteArray digest = hash.result().toHex();
 	PaperItem item;
-	item.name = QString::fromLatin1(kItemPrefix) + QString::fromLatin1(digest.left(10));
-	const QString modelId = QString::fromLatin1(digest.mid(10, 32));
+	item.name = QString::fromLatin1(kItemName);
+	const QString modelId = QString::fromLatin1(digest.left(32));
 
 	const QString textureFile = base + QStringLiteral(".2048/texture_00.png");
 	const QJsonObject model3{
@@ -533,8 +532,10 @@ PaperItem paperItem(const QByteArray &texturePng)
 	return item;
 }
 
-bool installItem(const QString &itemsFolder, const PaperItem &item, QString &why)
+bool installItem(const QString &itemsFolder, const PaperItem &item, QString &why, int *wrote)
 {
+	if (wrote)
+		*wrote = 0;
 	const QDir items(itemsFolder);
 	if (itemsFolder.isEmpty() || !items.exists()) {
 		why = QStringLiteral("VTube Studio's Items folder was not found");
@@ -543,6 +544,13 @@ bool installItem(const QString &itemsFolder, const PaperItem &item, QString &why
 	const QDir folder(items.filePath(item.name));
 	for (const auto &[path, bytes] : item.files) {
 		const QString file = folder.filePath(path);
+		if (QFile::exists(file)) {
+			if (path.endsWith(QStringLiteral(".vtube.json")))
+				continue; // the streamer's settings for the item
+			QFile there(file);
+			if (there.open(QIODevice::ReadOnly) && there.size() == bytes.size() && there.readAll() == bytes)
+				continue;
+		}
 		if (!QDir().mkpath(QFileInfo(file).absolutePath())) {
 			why = QStringLiteral("cannot make a folder in %1").arg(QDir::toNativeSeparators(itemsFolder));
 			return false;
@@ -552,6 +560,8 @@ bool installItem(const QString &itemsFolder, const PaperItem &item, QString &why
 			why = QStringLiteral("cannot write %1").arg(QDir::toNativeSeparators(file));
 			return false;
 		}
+		if (wrote)
+			++*wrote;
 	}
 	return true;
 }
