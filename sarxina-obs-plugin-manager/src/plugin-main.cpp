@@ -1,4 +1,4 @@
-// The Sarxina OBS Plugin Manager as an OBS plugin: its dock, and the three procedures other plugins reach it through
+// The Sarxina OBS Plugin Manager as an OBS plugin: its dock, and the four procedures other plugins reach it through
 // (sarxina-obs-plugin-manager.h). They go on OBS's global procedure handler when the manager loads, which is before
 // any plugin's obs_module_post_load, so every plugin finds them whatever order OBS loads plugins in.
 #include "manager-dock.hpp"
@@ -49,21 +49,16 @@ void vtsRequest(void *, calldata_t *call)
 		manager->vtsRequest(*request);
 }
 
-// Chat is the chat of the Twitch account this OBS profile is connected to.
-void followProfile()
+void twitchRequest(void *, calldata_t *call)
 {
-	const QString account = sarxina::twitchAccount(obs_frontend_get_profile_config());
-	if (account.isEmpty())
-		blog(LOG_INFO, "[%s] this OBS profile is not connected to a Twitch account", PLUGIN_TITLE);
-	manager->followTwitchAccount(account);
+	const auto *request = static_cast<const sarxina_twitch_request *>(calldata_ptr(call, "request"));
+	if (manager && request)
+		manager->twitchRequest(*request);
 }
 
 void frontendEvent(enum obs_frontend_event event, void *)
 {
-	if (event == OBS_FRONTEND_EVENT_PROFILE_CHANGED) {
-		followProfile();
-	} else if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
-		followProfile();
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
 		manager->start();
 		if (qEnvironmentVariableIntValue("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST") != 0) {
 			runSelfTest(qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES").constData());
@@ -84,13 +79,14 @@ void frontendEvent(enum obs_frontend_event event, void *)
 bool obs_module_load(void)
 {
 	manager = new sarxina::Manager(sarxina::Manager::Use::Obs, sarxina::TwitchChat::kServer,
-				       sarxina::Store::Setup::forObs());
+				       sarxina::Store::Setup::forObs(), sarxina::TwitchApi::Setup::forObs());
 	proc_handler_t *procs = obs_get_proc_handler();
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_register(in ptr plugin, out bool accepted)",
 			 registerPlugin, nullptr);
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_settings_changed(in string id)", settingsChanged,
 			 nullptr);
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_vts_request(in ptr request)", vtsRequest, nullptr);
+	proc_handler_add(procs, "void sarxina_obs_plugin_manager_twitch_request(in ptr request)", twitchRequest, nullptr);
 
 	if (obs_frontend_get_main_window()) {
 		dock = new sarxina::ManagerDock(*manager);

@@ -1,9 +1,8 @@
 // The Sarxina OBS Plugin Manager's self-test (see shared/src/self-test.hpp). It needs no OBS and no internet: Twitch
-// and VTube Studio are played by small stand-in websocket servers on this computer, and GitHub by a stand-in http
-// server, and plugins are installed into a folder of its own that it deletes afterwards.
+// and VTube Studio are played by small stand-in websocket servers on this computer, and GitHub and Twitch's API by
+// stand-in http servers, and plugins are installed into a folder of its own that it deletes afterwards.
 //
-//   1. Lines from Twitch become the right chat messages, and the Twitch account OBS is connected to is read from its
-//      profile (only the name).
+//   1. Lines from Twitch become the right chat messages.
 //   2. The checks drop what they should and let the rest through.
 //   3. Commands reach the plugin that registered them, and only when they may.
 //   4. The whole way: a stand-in Twitch sends chat over a real websocket, and a plugin's handler gets the command.
@@ -15,13 +14,19 @@
 //   8. Installing, updating and uninstalling, laid out the way a portable OBS and ProgramData want them, with
 //      downloads that go wrong installing nothing, and what is left for the next start finished then.
 //   9. The dock: Install, Uninstall and Update, what each line says, and the list of plugins OBS runs.
-// Given a folder, it also paints the dock into dock.png there, its dropdown into dropdown.png, and what a plugin's gear
-// shows into settings.png. With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_ONLINE=1 it also downloads a released zip from
-// GitHub itself.
+//  10. The one Twitch connection, against a stand-in for Twitch that answers as Twitch's documentation shows:
+//      connecting with the device code flow, plugins' requests with the broadcaster, the Client-Id and the token added,
+//      Twitch's answers passed on as they came, a token refreshed once when it ran out, and every way it can go wrong.
+//  11. The dock's line for Twitch in each of its states, and the chat of the account connected under it.
+//  12. Buttons in a plugin's settings.
+// Given a folder, it also paints the dock into dock.png there (and into dock-code.png while the code for Twitch waits
+// to be entered), its dropdown into dropdown.png, and what a plugin's gear shows into settings.png. With
+// SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_ONLINE=1 it also downloads a released zip from GitHub itself.
 //
 // Inside OBS (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1) checkInObs also lists the plugins that registered through OBS
-// and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would. pressInObs presses
-// one button in the real dock (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS, see there).
+// and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would; and when Twitch is
+// connected, asks Twitch for the channel's rewards the same way. pressInObs presses one button in the real dock
+// (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS, see there).
 #include "self-test.hpp"
 
 #include "catalog.hpp"
@@ -55,6 +60,7 @@
 #include <QThread>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 #include <QWidgetAction>
 
@@ -75,6 +81,9 @@ QString text(const char *key)
 {
 	return QString::fromUtf8(obs_module_text(key));
 }
+
+// For a manager whose chat is not under test: nothing listens there, so it never reaches the real Twitch.
+const QString kNoChat = QStringLiteral("ws://127.0.0.1:1");
 
 // Runs Qt's event loop until `done` or until `ms` have passed.
 template<typename Done> bool waitFor(Done done, int ms = 5000)
@@ -414,46 +423,6 @@ bool parsing()
 	return tally.report("Twitch", "lines read as expected");
 }
 
-// ---- 1b. the Twitch account OBS is connected to ---------------------------------------------------------------------
-
-// What a profile's basic.ini looks like with a connected Twitch account. The tokens beside the name are never read.
-const char *const kConnectedProfile = "[General]\nName=Streaming\n"
-				      "[Auth]\nType=Twitch\n"
-				      "[Twitch]\nName=sarxina\nUUID=x\nToken=not-for-us\nRefreshToken=not-for-us\n";
-
-QString accountIn(const char *profile)
-{
-	config_t *config = nullptr;
-	if (config_open_string(&config, profile) != CONFIG_SUCCESS)
-		return QStringLiteral("(unreadable)");
-	const QString account = twitchAccount(config);
-	config_close(config);
-	return account;
-}
-
-bool account()
-{
-	Tally tally;
-	tally.expect(accountIn(kConnectedProfile) == "sarxina", "the name of the connected account");
-	tally.expect(accountIn("[Auth]\nType=YouTube - RTMPS\n[Twitch]\nName=sarxina\n").isEmpty(),
-		     "nothing when OBS is connected to another service");
-	tally.expect(accountIn("[Twitch]\nName=sarxina\n").isEmpty(), "nothing when the account was disconnected");
-	tally.expect(accountIn("[Auth]\nType=Twitch\n[Twitch]\nName=two words\n").isEmpty(), "nothing for a bad name");
-	tally.expect(accountIn("[General]\nName=Untitled\n").isEmpty() && twitchAccount(nullptr).isEmpty(),
-		     "nothing in a profile without one");
-
-	// Given a copy of a real profile, says which account it has: only the name.
-	const QByteArray copy = qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE");
-	config_t *config = nullptr;
-	if (!copy.isEmpty() && config_open(&config, copy.constData(), CONFIG_OPEN_EXISTING) == CONFIG_SUCCESS) {
-		const QString name = twitchAccount(config);
-		config_close(config);
-		test::report(true, "Twitch account in %s: %s", copy.constData(),
-			     name.isEmpty() ? "none" : name.toUtf8().constData());
-	}
-	return tally.report("Twitch account", "profiles read as expected");
-}
-
 // ---- 2. the checks --------------------------------------------------------------------------------------------------
 
 bool checks()
@@ -625,7 +594,7 @@ bool twitchConnection()
 	handshake(" after the drop");
 
 	manager.followTwitchAccount("");
-	tally.expect(manager.twitch().state() == TwitchChat::State::Off, "off when OBS has no Twitch account");
+	tally.expect(manager.twitch().state() == TwitchChat::State::Off, "off when no Twitch account is connected");
 	return tally.report("Twitch connection", "steps as expected");
 }
 
@@ -1328,7 +1297,7 @@ bool theDock()
 	const sarxina_plugin_info one = testPlugin(first, "first", "Test plugin");
 	sarxina_plugin_info two = testPlugin(second, "second", "Another test plugin");
 	two.get_properties = nullptr;
-	Manager manager(Manager::Use::SelfTest, TwitchChat::kServer, setupFor(github, layout, &loaded, {}));
+	Manager manager(Manager::Use::SelfTest, kNoChat, setupFor(github, layout, &loaded, {}));
 	ManagerDock dock(manager); // made first, as in OBS, where plugins register once the dock is there
 	dock.setAttribute(Qt::WA_DontShowOnScreen);
 	dock.show();
@@ -1392,6 +1361,772 @@ void saveDropdown(ManagerDock &dock, const QString &file)
 	menu->hide();
 }
 
+// ---- 10. Twitch's API, over a stand-in for Twitch -------------------------------------------------------------------
+
+// An http server on this computer standing in for id.twitch.tv and api.twitch.tv. It keeps each request whole and
+// answers only when the test says what to answer, oldest first, so that the test sees every step.
+class StandInTwitch : public QObject {
+public:
+	struct Request {
+		QByteArray method, path, body;
+		std::map<QByteArray, QByteArray> headers; // names in lower case
+
+		QByteArray header(const char *name) const
+		{
+			const auto found = headers.find(name);
+			return found == headers.end() ? QByteArray() : found->second;
+		}
+		// A field of the form it posted, decoded.
+		QString field(const char *name) const
+		{
+			return QUrlQuery(QString::fromUtf8(body)).queryItemValue(QString::fromLatin1(name), QUrl::FullyDecoded);
+		}
+		bool hasField(const char *name) const
+		{
+			return QUrlQuery(QString::fromUtf8(body)).hasQueryItem(QString::fromLatin1(name));
+		}
+	};
+
+	StandInTwitch()
+	{
+		server_.listen(QHostAddress::LocalHost, 0);
+		connect(&server_, &QTcpServer::newConnection, this, [this] {
+			while (QTcpSocket *socket = server_.nextPendingConnection()) {
+				auto buffer = std::make_shared<QByteArray>();
+				connect(socket, &QTcpSocket::disconnected, socket, &QObject::deleteLater);
+				connect(socket, &QTcpSocket::readyRead, this, [this, socket, buffer] {
+					*buffer += socket->readAll();
+					const qsizetype end = buffer->indexOf("\r\n\r\n");
+					if (end < 0)
+						return;
+					Request request;
+					const QList<QByteArray> lines = buffer->left(end).split('\n');
+					const QList<QByteArray> first = lines.value(0).trimmed().split(' ');
+					request.method = first.value(0);
+					request.path = first.value(1);
+					for (qsizetype i = 1; i < lines.size(); i++)
+						if (const qsizetype colon = lines[i].indexOf(':'); colon > 0)
+							request.headers[lines[i].left(colon).trimmed().toLower()] = lines[i].mid(colon + 1).trimmed();
+					const qsizetype length = request.header("content-length").toLongLong();
+					if (buffer->size() < end + 4 + length)
+						return;
+					request.body = buffer->mid(end + 4, length);
+					buffer->clear();
+					got.push_back(request);
+					received++;
+					unanswered_.push_back(socket);
+				});
+			}
+		});
+	}
+
+	TwitchHosts hosts() const
+	{
+		return *TwitchHosts::testServer(QStringLiteral("http://127.0.0.1:%1").arg(server_.serverPort()));
+	}
+
+	// Waits for the next request.
+	bool next(Request &request, int ms = 5000)
+	{
+		if (!waitFor([this] { return !got.empty(); }, ms))
+			return false;
+		request = got.front();
+		got.pop_front();
+		return true;
+	}
+	// Answers the oldest request not answered yet.
+	void reply(int status, const QByteArray &body)
+	{
+		if (QTcpSocket *socket = oldest()) {
+			socket->write("HTTP/1.1 " + QByteArray::number(status) +
+				      " X\r\nContent-Type: application/json\r\nContent-Length: " + QByteArray::number(body.size()) +
+				      "\r\nConnection: close\r\n\r\n" + body);
+			socket->disconnectFromHost();
+		}
+	}
+	// Closes it without an answer, as when Twitch cannot be reached.
+	void drop()
+	{
+		if (QTcpSocket *socket = oldest())
+			socket->abort();
+	}
+
+	std::deque<Request> got;
+	int received = 0;
+
+private:
+	QTcpSocket *oldest()
+	{
+		while (!unanswered_.empty()) {
+			QPointer<QTcpSocket> socket = unanswered_.front();
+			unanswered_.pop_front();
+			if (socket)
+				return socket;
+		}
+		return nullptr;
+	}
+
+	QTcpServer server_;
+	std::deque<QPointer<QTcpSocket>> unanswered_;
+};
+
+// Twitch's answers, shaped as its documentation shows them (dev.twitch.tv/docs/authentication and
+// dev.twitch.tv/docs/api/reference). Twitch documents no answer for a streamer saying no or for asking too often in
+// the device code flow; those two have the OAuth device flow's own words (RFC 8628) in Twitch's shape.
+const char *const kClientId = "selftest0client0id0abcdefghij0";
+const QByteArray kDevice = R"({"device_code":"ike3GM8QIdYZs43KdrWPIO36LofILoCyFEzjlQ91","expires_in":1800,"interval":5,)"
+			   R"("user_code":"ABCDEFGH","verification_uri":)"
+			   R"("https://www.twitch.tv/activate?public=true&device-code=ABCDEFGH"})";
+const QByteArray kPending = R"({"status":400,"message":"authorization_pending"})";
+const QByteArray kSlowDown = R"({"status":400,"message":"slow_down"})";
+const QByteArray kDenied = R"({"status":400,"message":"access_denied"})";
+const QByteArray kExpired = R"({"status":400,"message":"invalid device code"})";
+const QByteArray kToken = R"({"access_token":"rfx2uswqe8l4g1mkagrvg5tv0ks3","expires_in":14124,)"
+			  R"("refresh_token":"5b93chm6hdve3mycz05zfzatkfdenfspp1h1ar2xxdalen01",)"
+			  R"("scope":["channel:manage:redemptions","channel:read:redemptions"],"token_type":"bearer"})";
+const QByteArray kValidate = R"({"client_id":"selftest0client0id0abcdefghij0","login":"sarxina",)"
+			     R"("scopes":["channel:manage:redemptions","channel:read:redemptions"],"user_id":"141981764",)"
+			     R"("expires_in":14124})";
+const QByteArray kValidateOtherScopes = R"({"client_id":"selftest0client0id0abcdefghij0","login":"sarxina",)"
+					R"("scopes":["channel:read:subscriptions"],"user_id":"141981764","expires_in":5520838})";
+const QByteArray kUnauthorized = R"({"error":"Unauthorized","status":401,"message":"Invalid OAuth token"})";
+const QByteArray kRefreshed = R"({"access_token":"1ssjqsqfy6bads1ws7m03gras79zfr","expires_in":15583,)"
+			      R"("refresh_token":"eyJfMzUtNDU0OC4MWYwLTQ5MDY5ODY4NGNlMSJ9%asdfasdf=",)"
+			      R"("scope":["channel:manage:redemptions","channel:read:redemptions"],"token_type":"bearer"})";
+const QByteArray kRefreshedAgain = R"({"access_token":"2gbdx6oar67tqtcmt49t3wpcgycthx","expires_in":14400,)"
+				   R"("refresh_token":"8tv8hqqo1ctvbbqepm0fmb1a1kb6b5xfrm6ma7y35ntcgxa2ce",)"
+				   R"("scope":["channel:manage:redemptions","channel:read:redemptions"],"token_type":"bearer"})";
+const QByteArray kBadRefresh = R"({"error":"Bad Request","status":400,"message":"Invalid refresh token"})";
+const QByteArray kRewards =
+	R"({"data":[{"broadcaster_name":"sarxina","broadcaster_login":"sarxina","broadcaster_id":"141981764",)"
+	R"("id":"92af127c-7326-4483-a52b-b0da0be61c01","image":null,"background_color":"#00E5CB","is_enabled":true,)"
+	R"("cost":50000,"title":"game analysis","prompt":"","is_user_input_required":false,)"
+	R"("max_per_stream_setting":{"is_enabled":false,"max_per_stream":0},)"
+	R"("max_per_user_per_stream_setting":{"is_enabled":false,"max_per_user_per_stream":0},)"
+	R"("global_cooldown_setting":{"is_enabled":false,"global_cooldown_seconds":0},"is_paused":false,"is_in_stock":true,)"
+	R"("default_image":{"url_1x":"https://static-cdn.jtvnw.net/custom-reward-images/default-1.png",)"
+	R"("url_2x":"https://static-cdn.jtvnw.net/custom-reward-images/default-2.png",)"
+	R"("url_4x":"https://static-cdn.jtvnw.net/custom-reward-images/default-4.png"},)"
+	R"("should_redemptions_skip_request_queue":false,"redemptions_redeemed_current_stream":null,)"
+	R"("cooldown_expires_at":null},)"
+	R"({"broadcaster_name":"sarxina","broadcaster_login":"sarxina","broadcaster_id":"141981764",)"
+	R"("id":"0c7c2a4e-6f1d-4a5b-9a43-2f8a1d6e5b77","image":null,"background_color":"#9147FF","is_enabled":true,)"
+	R"("cost":100,"title":"Drop a ball","prompt":"Where should it land?","is_user_input_required":true,)"
+	R"("max_per_stream_setting":{"is_enabled":false,"max_per_stream":0},)"
+	R"("max_per_user_per_stream_setting":{"is_enabled":false,"max_per_user_per_stream":0},)"
+	R"("global_cooldown_setting":{"is_enabled":true,"global_cooldown_seconds":30},"is_paused":false,"is_in_stock":true,)"
+	R"("default_image":{"url_1x":"https://static-cdn.jtvnw.net/custom-reward-images/default-1.png",)"
+	R"("url_2x":"https://static-cdn.jtvnw.net/custom-reward-images/default-2.png",)"
+	R"("url_4x":"https://static-cdn.jtvnw.net/custom-reward-images/default-4.png"},)"
+	R"("should_redemptions_skip_request_queue":false,"redemptions_redeemed_current_stream":null,)"
+	R"("cooldown_expires_at":null}]})";
+const QByteArray kCreated =
+	R"({"data":[{"broadcaster_name":"sarxina","broadcaster_login":"sarxina","broadcaster_id":"141981764",)"
+	R"("id":"afaa7e34-6b17-49f0-a19a-d1e76eaaf673","image":null,"background_color":"#9147FF","is_enabled":true,)"
+	R"("cost":100,"title":"Drop a ball","prompt":"","is_user_input_required":false,)"
+	R"("max_per_stream_setting":{"is_enabled":false,"max_per_stream":0},)"
+	R"("max_per_user_per_stream_setting":{"is_enabled":false,"max_per_user_per_stream":0},)"
+	R"("global_cooldown_setting":{"is_enabled":false,"global_cooldown_seconds":0},"is_paused":false,"is_in_stock":true,)"
+	R"("default_image":{"url_1x":"https://static-cdn.jtvnw.net/custom-reward-images/default-1.png",)"
+	R"("url_2x":"https://static-cdn.jtvnw.net/custom-reward-images/default-2.png",)"
+	R"("url_4x":"https://static-cdn.jtvnw.net/custom-reward-images/default-4.png"},)"
+	R"("should_redemptions_skip_request_queue":false,"redemptions_redeemed_current_stream":0,)"
+	R"("cooldown_expires_at":null}]})";
+const QByteArray kNotAffiliate =
+	R"({"error":"Forbidden","status":403,"message":"The broadcaster must have partner or affiliate status."})";
+const QByteArray kRedemptions =
+	R"({"data":[{"broadcaster_name":"sarxina","broadcaster_login":"sarxina","broadcaster_id":"141981764",)"
+	R"("id":"17fa2df1-ad76-4804-bfa5-a40ef63efe63","user_login":"viewer","user_id":"274637212","user_name":"Viewer",)"
+	R"("user_input":"","status":"UNFULFILLED","redeemed_at":"2020-07-01T18:37:32Z",)"
+	R"("reward":{"id":"92af127c-7326-4483-a52b-b0da0be61c01","title":"game analysis","prompt":"","cost":50000}}],)"
+	R"("pagination":{"cursor":"eyJiIjpudWxsLCJhIjp7IkN1cnNvciI6Ik1UZG1ZVEprWmpFdFlXUTNOaTAwT0RBMExXSm1aVE10WVRRd1pXWT)"
+	R"(JNMlZtWlRZelgxOHlNREl3TFRBM0xUQXhWREU0T2pNM09qTXlMakl6TXpFeU56RTFOMW89In19"}})";
+const QByteArray kFulfilled =
+	R"({"data":[{"broadcaster_name":"sarxina","broadcaster_login":"sarxina","broadcaster_id":"141981764",)"
+	R"("id":"17fa2df1-ad76-4804-bfa5-a40ef63efe63","user_login":"viewer","user_id":"274637212","user_name":"Viewer",)"
+	R"("user_input":"","status":"FULFILLED","redeemed_at":"2020-07-01T18:37:32Z",)"
+	R"("reward":{"id":"92af127c-7326-4483-a52b-b0da0be61c01","title":"game analysis","prompt":"","cost":50000}}]})";
+const QByteArray kScopes = "channel:read:redemptions channel:manage:redemptions";
+
+// What a plugin's `done` heard.
+struct TwitchAnswer {
+	int calls = 0;
+	int status = -1;
+	QByteArray body;
+	bool onUiThread = true;
+
+	QString message() const { return QJsonDocument::fromJson(body).object().value("message").toString(); }
+};
+
+void twitchAnswered(void *param, int status, const char *body)
+{
+	TwitchAnswer &answer = *static_cast<TwitchAnswer *>(param);
+	answer.calls++;
+	answer.status = status;
+	answer.body = body;
+	answer.onUiThread = answer.onUiThread && QThread::currentThread() == QCoreApplication::instance()->thread();
+}
+
+TwitchApi::Setup twitchSetup(const StandInTwitch &twitch, const char *clientId, const QString &remembered,
+			     std::vector<QUrl> *opened, int secondMs = 40)
+{
+	TwitchApi::Setup setup;
+	setup.hosts = twitch.hosts();
+	setup.clientId = QString::fromLatin1(clientId);
+	setup.remembered = remembered;
+	if (opened)
+		setup.open = [opened](const QUrl &url) { opened->push_back(url); };
+	setup.secondMs = secondMs; // Twitch's 5 seconds between asking are 200 ms here
+	return setup;
+}
+
+QJsonObject readJson(const QString &path)
+{
+	return QJsonDocument::fromJson(readFile(path)).object();
+}
+
+bool twitchApi()
+{
+	Tally tally;
+	StandInTwitch twitch;
+	QTemporaryDir folder;
+	const QString remembered = folder.filePath("config/twitch.json");
+	std::vector<QUrl> opened;
+	StandInTwitch::Request r;
+
+	// Every request a plugin sends, and what its `done` heard. The strings it gives last only for the call.
+	std::deque<TwitchAnswer> answers;
+	bool neverInside = true;
+	const auto ask = [&](Manager &manager, const char *method, const char *path,
+			     const char *body = nullptr) -> TwitchAnswer & {
+		answers.emplace_back();
+		TwitchAnswer &answer = answers.back();
+		std::string m = method, p = path, b = body ? body : "";
+		manager.twitchRequest(sarxina_twitch_request{m.c_str(), p.c_str(), body ? b.c_str() : nullptr, twitchAnswered, &answer});
+		m.assign(m.size(), '?');
+		p.assign(p.size(), '?');
+		b.assign(b.size(), '?');
+		neverInside = neverInside && answer.calls == 0;
+		return answer;
+	};
+	const auto answered = [](TwitchAnswer &answer) { return waitFor([&answer] { return answer.calls > 0; }); };
+	const auto state = [](Manager &manager) { return manager.twitchApi().state(); };
+	// Connect pressed, the code entered, the tokens given, and the token checked with this answer.
+	const auto connectAll = [&](Manager &manager, const QByteArray &validated) {
+		manager.twitchApi().connectTwitch();
+		bool ok = twitch.next(r) && r.path == "/oauth2/device";
+		twitch.reply(200, kDevice);
+		ok = ok && twitch.next(r) && r.path == "/oauth2/token";
+		twitch.reply(200, kToken);
+		ok = ok && twitch.next(r) && r.path == "/oauth2/validate";
+		twitch.reply(200, validated);
+		return ok && waitFor([&] { return state(manager) != TwitchApi::State::Connecting; });
+	};
+
+	// Where requests may go: Twitch's own two hosts over HTTPS, or a test server on 127.0.0.1
+	const TwitchHosts real = TwitchHosts::twitch();
+	tally.expect(real.id == "https://id.twitch.tv" && real.api == "https://api.twitch.tv/helix" && !real.local,
+		     "Twitch: id.twitch.tv and api.twitch.tv, over HTTPS");
+	const auto local = TwitchHosts::testServer("http://127.0.0.1:8790");
+	tally.expect(local && local->local && local->id == "http://127.0.0.1:8790" && local->api == "http://127.0.0.1:8790/helix",
+		     "a test server on 127.0.0.1");
+	for (const char *other : {"http://localhost:8790", "https://127.0.0.1:8790", "http://192.168.1.5:8790", "http://127.0.0.1",
+				  "http://127.0.0.1:1/x", "http://user@127.0.0.1:1"})
+		tally.expect(!TwitchHosts::testServer(other), std::string("not a test server: ") + other);
+	tally.expect(TwitchHttp::allowed(real, "https://api.twitch.tv/helix/channel_points/custom_rewards?broadcaster_id=1") &&
+			     TwitchHttp::allowed(real, "https://id.twitch.tv/oauth2/validate"),
+		     "Twitch's addresses allowed");
+	for (const char *other : {"http://api.twitch.tv/helix/x", "https://api.twitch.tv.evil.example/helix/x",
+				  "https://evil.example/https://api.twitch.tv/helix/", "https://api.twitch.tv:8443/helix/x",
+				  "https://api.twitch.tv/kraken/x", "https://user@id.twitch.tv/oauth2/token"})
+		tally.expect(!TwitchHttp::allowed(real, other), std::string("not Twitch: ") + other);
+
+	// A build without a Twitch app id
+	{
+		Manager manager(Manager::Use::SelfTest, kNoChat, Store::Setup(),
+				twitchSetup(twitch, "", remembered, &opened));
+		tally.expect(state(manager) == TwitchApi::State::NoApp, "no app id: it says it cannot connect");
+		TwitchAnswer &answer = ask(manager, "GET", "/channel_points/custom_rewards");
+		tally.expect(answered(answer) && answer.status == 0 && answer.message() == text("Api.NoApp"),
+			     "no app id: a request answered with status 0 and why");
+		manager.twitchApi().connectTwitch();
+		tally.expect(state(manager) == TwitchApi::State::NoApp && !twitch.next(r, 200), "no app id: Connect does nothing");
+	}
+
+	auto manager = std::make_unique<Manager>(Manager::Use::SelfTest, kNoChat, Store::Setup(),
+						 twitchSetup(twitch, kClientId, remembered, &opened));
+	TwitchApi &api = manager->twitchApi();
+	tally.expect(api.state() == TwitchApi::State::Off, "not connected at first");
+	TwitchAnswer &first = ask(*manager, "GET", "/channel_points/custom_rewards");
+	tally.expect(answered(first) && first.status == 0 && first.message() == text("Api.NotConnected") && twitch.received == 0,
+		     "not connected: status 0 and why, and nothing sent");
+
+	// Connect: a code, the page to enter it on, asking until it is entered, slowing down when Twitch says so
+	api.connectTwitch();
+	tally.expect(api.state() == TwitchApi::State::Connecting && twitch.next(r) && r.method == "POST" &&
+			     r.path == "/oauth2/device" &&
+			     r.header("content-type") == "application/x-www-form-urlencoded" &&
+			     r.field("client_id") == kClientId && r.field("scopes") == kScopes && !r.hasField("client_secret"),
+		     "Connect asks Twitch for a code with the app id and both scopes, and no secret");
+	twitch.reply(200, kDevice);
+	tally.expect(waitFor([&] { return api.state() == TwitchApi::State::Waiting; }) && api.userCode() == "ABCDEFGH" &&
+			     opened.size() == 1 &&
+			     opened[0] == QUrl("https://www.twitch.tv/activate?public=true&device-code=ABCDEFGH"),
+		     "waiting for the code, with twitch.tv/activate opened");
+	QElapsedTimer clock;
+	clock.start();
+	tally.expect(twitch.next(r) && r.method == "POST" && r.path == "/oauth2/token" && r.field("client_id") == kClientId &&
+			     r.field("device_code") == "ike3GM8QIdYZs43KdrWPIO36LofILoCyFEzjlQ91" &&
+			     r.field("grant_type") == "urn:ietf:params:oauth:grant-type:device_code" &&
+			     r.field("scopes") == kScopes,
+		     "asking whether the code was entered");
+	twitch.reply(400, kPending);
+	tally.expect(twitch.next(r) && r.path == "/oauth2/token" && api.state() == TwitchApi::State::Waiting,
+		     "not yet: asking again");
+	twitch.reply(400, kSlowDown);
+	const qint64 slowed = clock.elapsed();
+	tally.expect(twitch.next(r) && r.path == "/oauth2/token" && clock.elapsed() - slowed >= 380,
+		     "slow_down: asking 5 seconds less often");
+	twitch.reply(200, kToken);
+	tally.expect(twitch.next(r) && r.method == "GET" && r.path == "/oauth2/validate" &&
+			     r.header("authorization") == "OAuth rfx2uswqe8l4g1mkagrvg5tv0ks3",
+		     "the new token checked with Twitch");
+	twitch.reply(200, kValidate);
+	tally.expect(waitFor([&] { return api.state() == TwitchApi::State::Ready; }) && api.login() == "sarxina",
+		     "connected as sarxina");
+	QJsonObject kept = readJson(remembered);
+	tally.expect(kept.value("access_token").toString() == "rfx2uswqe8l4g1mkagrvg5tv0ks3" &&
+			     kept.value("refresh_token").toString() == "5b93chm6hdve3mycz05zfzatkfdenfspp1h1ar2xxdalen01" &&
+			     kept.value("login").toString() == "sarxina" && kept.value("user_id").toString() == "141981764",
+		     "the tokens kept in twitch.json");
+
+	// Plugins' requests: the broadcaster, the Client-Id and the token added, Twitch's answer passed on as it came
+	TwitchAnswer &rewards = ask(*manager, "GET", "/channel_points/custom_rewards");
+	tally.expect(twitch.next(r) && r.method == "GET" &&
+			     r.path == "/helix/channel_points/custom_rewards?broadcaster_id=141981764" &&
+			     r.header("client-id") == kClientId &&
+			     r.header("authorization") == "Bearer rfx2uswqe8l4g1mkagrvg5tv0ks3" && r.body.isEmpty(),
+		     "a GET with broadcaster_id, Client-Id and the token added");
+	twitch.reply(200, kRewards);
+	const QJsonArray listedRewards =
+		answered(rewards) ? QJsonDocument::fromJson(rewards.body).object().value("data").toArray() : QJsonArray();
+	tally.expect(rewards.status == 200 && rewards.body == kRewards && listedRewards.size() == 2 &&
+			     listedRewards[1].toObject().value("is_user_input_required").toBool(),
+		     "the rewards reaching the plugin as Twitch sent them");
+
+	TwitchAnswer &manageable = ask(*manager, "GET", "/channel_points/custom_rewards?only_manageable_rewards=true");
+	tally.expect(twitch.next(r) &&
+			     r.path == "/helix/channel_points/custom_rewards?only_manageable_rewards=true&broadcaster_id=141981764",
+		     "broadcaster_id added to a query the path has");
+	twitch.reply(200, R"({"data":[]})");
+	answered(manageable);
+	TwitchAnswer &otherChannel = ask(*manager, "GET", "/channel_points/custom_rewards?broadcaster_id=999&first=1");
+	tally.expect(twitch.next(r) && r.path == "/helix/channel_points/custom_rewards?first=1&broadcaster_id=141981764",
+		     "a broadcaster_id in the path replaced by the connected one");
+	twitch.reply(200, R"({"data":[]})");
+	answered(otherChannel);
+
+	const char *newReward = R"({"title":"Drop a ball","cost":100,"is_user_input_required":false})";
+	TwitchAnswer &created = ask(*manager, "POST", "/channel_points/custom_rewards", newReward);
+	tally.expect(twitch.next(r) && r.method == "POST" &&
+			     r.path == "/helix/channel_points/custom_rewards?broadcaster_id=141981764" &&
+			     r.header("content-type") == "application/json" && r.body == newReward,
+		     "a POST with its JSON body");
+	twitch.reply(200, kCreated);
+	tally.expect(answered(created) && created.status == 200 &&
+			     QJsonDocument::fromJson(created.body).object().value("data")[0].toObject().value("id").toString() ==
+				     "afaa7e34-6b17-49f0-a19a-d1e76eaaf673",
+		     "a new reward: its id reaching the plugin");
+	TwitchAnswer &refused = ask(*manager, "POST", "/channel_points/custom_rewards", newReward);
+	twitch.next(r);
+	twitch.reply(403, kNotAffiliate);
+	tally.expect(answered(refused) && refused.status == 403 && refused.body == kNotAffiliate,
+		     "not an affiliate: Twitch's 403 passed on unchanged");
+
+	TwitchAnswer &waiting = ask(*manager, "GET",
+				    "/channel_points/custom_rewards/redemptions?reward_id=92af127c-7326-4483-a52b-b0da0be61c01"
+				    "&status=UNFULFILLED");
+	tally.expect(twitch.next(r) && r.method == "GET" &&
+			     r.path == "/helix/channel_points/custom_rewards/redemptions?reward_id=92af127c-7326-4483-a52b-"
+				       "b0da0be61c01&status=UNFULFILLED&broadcaster_id=141981764",
+		     "the redemptions waiting");
+	twitch.reply(200, kRedemptions);
+	tally.expect(answered(waiting) && waiting.status == 200 && waiting.body == kRedemptions, "and their answer");
+	TwitchAnswer &fulfilled = ask(*manager, "PATCH",
+				      "/channel_points/custom_rewards/redemptions?id=17fa2df1-ad76-4804-bfa5-a40ef63efe63"
+				      "&reward_id=92af127c-7326-4483-a52b-b0da0be61c01",
+				      R"({"status":"FULFILLED"})");
+	tally.expect(twitch.next(r) && r.method == "PATCH" &&
+			     r.path == "/helix/channel_points/custom_rewards/redemptions?id=17fa2df1-ad76-4804-bfa5-"
+				       "a40ef63efe63&reward_id=92af127c-7326-4483-a52b-b0da0be61c01&broadcaster_id=141981764" &&
+			     r.body == R"({"status":"FULFILLED"})" && r.header("content-type") == "application/json",
+		     "a redemption marked FULFILLED with PATCH");
+	twitch.reply(200, kFulfilled);
+	tally.expect(answered(fulfilled) && fulfilled.status == 200 && fulfilled.body == kFulfilled, "and its answer");
+
+	const int sent = twitch.received;
+	TwitchAnswer &badMethod = ask(*manager, "PUT", "/channel_points/custom_rewards");
+	TwitchAnswer &badPath = ask(*manager, "GET", "/../users");
+	tally.expect(answered(badMethod) && answered(badPath) && badMethod.status == 0 && badPath.status == 0 &&
+			     badPath.message() == text("Api.NotARequest") && twitch.received == sent,
+		     "a method or a path Twitch's API does not take: not sent");
+
+	// The token ran out: refreshed once, the new refresh token kept, the request sent again with the new token
+	TwitchAnswer &expired = ask(*manager, "GET", "/channel_points/custom_rewards");
+	twitch.next(r);
+	twitch.reply(401, kUnauthorized);
+	tally.expect(twitch.next(r) && r.method == "POST" && r.path == "/oauth2/token" &&
+			     r.field("grant_type") == "refresh_token" &&
+			     r.field("refresh_token") == "5b93chm6hdve3mycz05zfzatkfdenfspp1h1ar2xxdalen01" &&
+			     r.field("client_id") == kClientId && !r.hasField("client_secret"),
+		     "a 401: the token refreshed, as a public app, with no secret");
+	twitch.reply(200, kRefreshed);
+	tally.expect(twitch.next(r) && r.path == "/helix/channel_points/custom_rewards?broadcaster_id=141981764" &&
+			     r.header("authorization") == "Bearer 1ssjqsqfy6bads1ws7m03gras79zfr",
+		     "and the request sent again with the new token");
+	twitch.reply(200, kRewards);
+	kept = readJson(remembered);
+	tally.expect(answered(expired) && expired.status == 200 && expired.body == kRewards &&
+			     kept.value("access_token").toString() == "1ssjqsqfy6bads1ws7m03gras79zfr" &&
+			     kept.value("refresh_token").toString() == "eyJfMzUtNDU0OC4MWYwLTQ5MDY5ODY4NGNlMSJ9%asdfasdf=",
+		     "its answer reaching the plugin, and the new refresh token kept");
+
+	// Two requests refused at once: one refresh for both
+	TwitchAnswer &one = ask(*manager, "GET", "/channel_points/custom_rewards");
+	TwitchAnswer &two = ask(*manager, "GET", "/channel_points/custom_rewards/redemptions?reward_id=1&status=UNFULFILLED");
+	twitch.next(r);
+	twitch.reply(401, kUnauthorized);
+	twitch.next(r);
+	twitch.reply(401, kUnauthorized);
+	tally.expect(twitch.next(r) && r.path == "/oauth2/token" &&
+			     r.field("refresh_token") == "eyJfMzUtNDU0OC4MWYwLTQ5MDY5ODY4NGNlMSJ9%asdfasdf=",
+		     "two refused at once: one refresh, with the refresh token as Twitch gave it");
+	twitch.reply(200, kRefreshedAgain);
+	// Requests go to Twitch one at a time: the second once the first is answered.
+	bool newToken = twitch.next(r) && r.header("authorization") == "Bearer 2gbdx6oar67tqtcmt49t3wpcgycthx";
+	twitch.reply(200, kRewards);
+	newToken = newToken && twitch.next(r) && r.header("authorization") == "Bearer 2gbdx6oar67tqtcmt49t3wpcgycthx";
+	twitch.reply(200, kRedemptions);
+	tally.expect(newToken, "both sent again with the new token");
+	tally.expect(answered(one) && answered(two) && one.status == 200 && two.status == 200 && !twitch.next(r, 200),
+		     "both answered, nothing more sent");
+
+	// The refresh refused: it needs reconnecting
+	TwitchAnswer &signedOut = ask(*manager, "GET", "/channel_points/custom_rewards");
+	twitch.next(r);
+	twitch.reply(401, kUnauthorized);
+	twitch.next(r);
+	twitch.reply(400, kBadRefresh);
+	const bool told = answered(signedOut);
+	kept = readJson(remembered);
+	tally.expect(told && signedOut.status == 0 && signedOut.message() == text("Api.Reconnect") &&
+			     api.state() == TwitchApi::State::Reconnect && api.why() == TwitchApi::Why::SignedOut &&
+			     !kept.contains("access_token") && !kept.contains("refresh_token") &&
+			     kept.value("reconnect").toString() == "signed-out",
+		     "a refresh Twitch refuses: needs reconnecting, the tokens forgotten");
+	TwitchAnswer &afterSignOut = ask(*manager, "GET", "/channel_points/custom_rewards");
+	tally.expect(answered(afterSignOut) && afterSignOut.status == 0 &&
+			     afterSignOut.message() == text("Api.Reconnect") && !twitch.next(r, 200),
+		     "and a request then says to reconnect, sending nothing");
+
+	// Reconnecting with a token that lacks the channel point scopes
+	tally.expect(connectAll(*manager, kValidateOtherScopes) && api.state() == TwitchApi::State::Reconnect &&
+			     api.why() == TwitchApi::Why::Scope,
+		     "a token without the channel point scopes: needs reconnecting");
+	TwitchAnswer &noScope = ask(*manager, "POST", "/channel_points/custom_rewards", newReward);
+	tally.expect(answered(noScope) && noScope.status == 0 &&
+			     noScope.message() == "Reconnect Twitch in the Sarxina OBS Plugin Manager." &&
+			     !twitch.next(r, 200),
+		     "and a request says to reconnect Twitch in the manager");
+
+	// The streamer says no, the code runs out, Twitch cannot be reached
+	const auto endsWith = [&](const QByteArray &answer, TwitchApi::Why why) {
+		api.connectTwitch();
+		bool ok = twitch.next(r) && r.path == "/oauth2/device";
+		twitch.reply(200, kDevice);
+		ok = ok && twitch.next(r) && r.path == "/oauth2/token";
+		if (answer.isEmpty())
+			twitch.drop();
+		else
+			twitch.reply(400, answer);
+		return ok && waitFor([&] { return api.state() != TwitchApi::State::Waiting; }) &&
+		       api.state() == TwitchApi::State::Off && api.why() == why;
+	};
+	tally.expect(endsWith(kDenied, TwitchApi::Why::Denied), "the streamer says no on Twitch: not connected, and why");
+	tally.expect(endsWith(kExpired, TwitchApi::Why::Expired), "the code ran out: not connected, and why");
+	api.connectTwitch();
+	twitch.next(r);
+	twitch.drop();
+	tally.expect(waitFor([&] { return api.state() == TwitchApi::State::Off; }) &&
+			     api.why() == TwitchApi::Why::Unreachable,
+		     "Twitch cannot be reached: not connected, and why");
+
+	// The next time OBS starts: connected at once, and the token checked
+	tally.expect(connectAll(*manager, kValidate) && api.state() == TwitchApi::State::Ready, "connected again");
+	manager.reset();
+	manager = std::make_unique<Manager>(Manager::Use::SelfTest, kNoChat, Store::Setup(),
+					    twitchSetup(twitch, kClientId, remembered, &opened));
+	tally.expect(manager->twitchApi().state() == TwitchApi::State::Ready && manager->twitchApi().login() == "sarxina",
+		     "the next start: connected as sarxina from twitch.json");
+	manager->start();
+	tally.expect(twitch.next(r) && r.path == "/oauth2/validate" && r.header("authorization") == "OAuth rfx2uswqe8l4g1mkagrvg5tv0ks3",
+		     "the next start: the token checked when OBS has loaded");
+	twitch.reply(200, kValidate);
+
+	// OBS closing with a request on its way: its answer never reaches the plugin
+	TwitchAnswer &late = ask(*manager, "GET", "/channel_points/custom_rewards");
+	tally.expect(twitch.next(r), "a request on its way");
+	manager->shutDown();
+	twitch.reply(200, kRewards);
+	TwitchAnswer &afterClose = ask(*manager, "GET", "/channel_points/custom_rewards");
+	waitFor([] { return false; }, 300);
+	tally.expect(late.calls == 0 && afterClose.calls == 0, "OBS closing: no answer reaches a plugin after that");
+
+	// Disconnect: Twitch told to forget the token, and twitch.json too
+	manager = std::make_unique<Manager>(Manager::Use::SelfTest, kNoChat, Store::Setup(),
+					    twitchSetup(twitch, kClientId, remembered, &opened));
+	manager->twitchApi().disconnectTwitch();
+	tally.expect(twitch.next(r) && r.path == "/oauth2/revoke" && r.field("client_id") == kClientId &&
+			     r.field("token") == "rfx2uswqe8l4g1mkagrvg5tv0ks3",
+		     "Disconnect: Twitch told to forget the token");
+	twitch.reply(200, {});
+	tally.expect(manager->twitchApi().state() == TwitchApi::State::Off && !readJson(remembered).contains("access_token"),
+		     "Disconnect: not connected, the tokens forgotten");
+	manager.reset();
+
+	// Twitch wants the token checked every hour. Here a second is 1 ms, and an hour 3.6 seconds.
+	{
+		Manager hourly(Manager::Use::SelfTest, kNoChat, Store::Setup(),
+			       twitchSetup(twitch, kClientId, folder.filePath("hourly.json"), &opened, 1));
+		connectAll(hourly, kValidate);
+		tally.expect(hourly.twitchApi().state() == TwitchApi::State::Ready && twitch.next(r, 8000) &&
+				     r.path == "/oauth2/validate",
+			     "the token checked again an hour later");
+		twitch.reply(200, kValidate);
+		hourly.shutDown();
+	}
+
+	waitFor([] { return false; }, 100);
+	bool once = neverInside;
+	for (const TwitchAnswer &answer : answers)
+		once = once && answer.onUiThread && (answer.calls == 1 || &answer == &late || &answer == &afterClose);
+	tally.expect(once, "every answer later than its request, exactly once, on the UI thread");
+	return tally.report("Twitch's API", "steps as expected");
+}
+
+// ---- 11. the dock's line for Twitch ---------------------------------------------------------------------------------
+
+bool twitchDock()
+{
+	Tally tally;
+	StandInTwitch twitch;
+	StandIn chat;
+	std::vector<QUrl> opened;
+	StandInTwitch::Request r;
+	const auto says = [](ManagerDock &dock) {
+		QLabel *label = dock.findChild<QLabel *>("twitch-state");
+		return label ? label->text() : QStringLiteral("(none)");
+	};
+	const auto button = [](ManagerDock &dock) {
+		QPushButton *button = dock.findChild<QPushButton *>("twitch-button");
+		return !button ? QStringLiteral("(none)") : button->isHidden() ? QStringLiteral("(hidden)") : button->text();
+	};
+	const auto press = [](ManagerDock &dock) {
+		if (QPushButton *button = dock.findChild<QPushButton *>("twitch-button"))
+			button->click();
+	};
+	const auto note = [](ManagerDock &dock) {
+		QLabel *label = dock.findChild<QLabel *>("twitch-chat");
+		return !label || label->isHidden() ? QString() : label->text();
+	};
+
+	{
+		Manager manager(Manager::Use::SelfTest, chat.url(), Store::Setup(), TwitchApi::Setup());
+		ManagerDock dock(manager);
+		tally.expect(says(dock) == text("Twitch.NoApp") && button(dock) == "(hidden)" && note(dock).isEmpty(),
+			     "a build without a Twitch app id: says so, no button, no chat");
+	}
+
+	Manager manager(Manager::Use::SelfTest, chat.url(), Store::Setup(), twitchSetup(twitch, kClientId, {}, &opened));
+	ManagerDock dock(manager);
+	dock.setAttribute(Qt::WA_DontShowOnScreen);
+	dock.show();
+	TwitchApi &api = manager.twitchApi();
+	tally.expect(says(dock) == text("Off") && button(dock) == text("Connect"), "not connected: Connect");
+
+	press(dock);
+	tally.expect(says(dock) == text("Twitch.Connecting") && button(dock) == "(hidden)", "Connect pressed: connecting");
+	twitch.next(r);
+	twitch.reply(200, kDevice);
+	waitFor([&] { return api.state() == TwitchApi::State::Waiting; });
+	QLabel *state = dock.findChild<QLabel *>("twitch-state");
+	tally.expect(says(dock) == "Go to twitch.tv/activate and enter ABCDEFGH" && button(dock) == text("Open") && state &&
+			     (state->textInteractionFlags() & Qt::TextSelectableByMouse),
+		     "the code to enter, which can be copied, and Open");
+	press(dock);
+	tally.expect(opened.size() == 2 && opened[1] == opened[0], "Open opens twitch.tv/activate again");
+	twitch.next(r);
+	twitch.reply(200, kToken);
+	twitch.next(r);
+	twitch.reply(200, kValidate);
+	waitFor([&] { return api.state() == TwitchApi::State::Ready; });
+	tally.expect(says(dock) == "Connected as sarxina" && button(dock) == text("Disconnect"),
+		     "Connected as sarxina, and Disconnect");
+
+	// The chat of the account connected, with nothing more to do: no OBS account, no restart.
+	QByteArray cap, nick, join;
+	tally.expect(chat.next(cap) && chat.next(nick) && chat.next(join) && join == "JOIN #sarxina" &&
+			     manager.twitch().channel() == "sarxina",
+		     "connected: reads the chat of the account connected");
+	tally.expect(note(dock) == "Connecting to #sarxina's chat...", "and says so under it");
+	chat.send(":" + nick.mid(5) + "!x@x JOIN #sarxina");
+	waitFor([&] { return manager.twitch().state() == TwitchChat::State::Reading; });
+	tally.expect(note(dock) == "Reading #sarxina's chat", "Reading #sarxina's chat, once Twitch says it joined");
+
+	TwitchAnswer answer;
+	manager.twitchRequest({"GET", "/channel_points/custom_rewards", nullptr, twitchAnswered, &answer});
+	twitch.next(r);
+	twitch.reply(401, kUnauthorized);
+	twitch.next(r);
+	twitch.reply(400, kBadRefresh);
+	waitFor([&] { return api.state() == TwitchApi::State::Reconnect; });
+	tally.expect(says(dock) == "Needs reconnecting: Twitch signed it out." && button(dock) == text("Reconnect") &&
+			     manager.twitch().state() == TwitchChat::State::Off && note(dock).isEmpty(),
+		     "signed out: Needs reconnecting, and Reconnect, and chat stops with it");
+
+	press(dock);
+	twitch.next(r);
+	twitch.reply(200, kDevice);
+	twitch.next(r);
+	twitch.reply(200, kToken);
+	twitch.next(r);
+	twitch.reply(200, kValidateOtherScopes);
+	waitFor([&] { return api.state() == TwitchApi::State::Reconnect; });
+	tally.expect(says(dock) == "Needs reconnecting: it isn't allowed to change channel points." &&
+			     button(dock) == text("Reconnect"),
+		     "a scope missing: Needs reconnecting, and Reconnect");
+
+	press(dock);
+	twitch.next(r);
+	twitch.reply(200, kDevice);
+	twitch.next(r);
+	twitch.reply(400, kDenied);
+	waitFor([&] { return api.state() == TwitchApi::State::Off; });
+	tally.expect(says(dock) == text("Twitch.Denied") && button(dock) == text("Connect"), "not allowed on Twitch: Connect");
+
+	press(dock);
+	twitch.next(r);
+	twitch.drop();
+	waitFor([&] { return api.why() == TwitchApi::Why::Unreachable; });
+	tally.expect(says(dock) == text("Twitch.Unreachable") && button(dock) == text("Connect"),
+		     "Twitch cannot be reached: Connect");
+
+	press(dock);
+	twitch.next(r);
+	twitch.reply(200, kDevice);
+	twitch.next(r);
+	twitch.reply(200, kToken);
+	twitch.next(r);
+	twitch.reply(200, kValidate);
+	waitFor([&] { return api.state() == TwitchApi::State::Ready; });
+	press(dock);
+	tally.expect(twitch.next(r) && r.path == "/oauth2/revoke" && says(dock) == text("Off") &&
+			     button(dock) == text("Connect") && manager.twitch().state() == TwitchChat::State::Off &&
+			     note(dock).isEmpty(),
+		     "Disconnect: not connected, Connect, and no chat");
+	twitch.reply(200, {});
+	return tally.report("Twitch in the dock", "steps as expected");
+}
+
+// ---- 12. buttons in a plugin's settings -----------------------------------------------------------------------------
+
+struct Clicks {
+	int properties = 0; // times the settings were asked for
+	int clicked = 0;
+	void *data = nullptr; // what the button's callback was handed
+	bool redraw = true;   // what it answers
+	PropertiesForm *form = nullptr;
+	bool reloadInside = false; // the plugin's settings change while its callback runs, as with settings_changed
+	std::string note = "No reward made yet.";
+};
+
+bool settingsForm()
+{
+	Tally tally;
+	Clicks clicks;
+	sarxina_plugin_info info{};
+	info.api = SARXINA_OBS_PLUGIN_MANAGER_API;
+	info.id = "buttons";
+	info.name = "Buttons";
+	info.data = &clicks;
+	info.set_enabled = [](void *, bool) {};
+	info.get_properties = [](void *data) {
+		Clicks &clicks = *static_cast<Clicks *>(data);
+		clicks.properties++;
+		obs_properties_t *properties = obs_properties_create();
+		obs_properties_add_text(properties, "made", clicks.note.c_str(), OBS_TEXT_INFO);
+		obs_property_t *make = obs_properties_add_button2(
+			properties, "make", "Create a new redeem",
+			[](obs_properties_t *, obs_property_t *, void *data) {
+				Clicks &clicks = *static_cast<Clicks *>(data);
+				clicks.clicked++;
+				clicks.data = data;
+				clicks.note = "Clicked " + std::to_string(clicks.clicked) + " times.";
+				if (clicks.reloadInside && clicks.form)
+					clicks.form->reload();
+				return clicks.redraw;
+			},
+			data);
+		obs_property_set_long_description(make, "Makes a reward on Twitch for this.");
+		return properties;
+	};
+	Plugin plugin{&info};
+
+	QWidget window;
+	window.setAttribute(Qt::WA_DontShowOnScreen);
+	auto *form = new PropertiesForm(plugin, &window);
+	clicks.form = form;
+	window.show();
+	const auto settle = [] { QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete); };
+	const auto theButton = [form]() -> QPushButton * {
+		for (QPushButton *button : form->findChildren<QPushButton *>())
+			if (button->text() == "Create a new redeem")
+				return button;
+		return nullptr;
+	};
+	const auto noted = [form](const char *words) {
+		for (QLabel *label : form->findChildren<QLabel *>())
+			if (label->text() == words)
+				return true;
+		return false;
+	};
+
+	tally.expect(theButton() && theButton()->toolTip() == "Makes a reward on Twitch for this." && clicks.properties == 1 &&
+			     noted("No reward made yet."),
+		     "a button drawn with its words and its tip, beside a note");
+	theButton()->click();
+	settle();
+	tally.expect(clicks.clicked == 1 && clicks.data == &clicks, "clicking it calls the plugin with the button's data");
+	tally.expect(clicks.properties == 2 && noted("Clicked 1 times.") && theButton(),
+		     "it answered true: the settings asked for again and drawn anew");
+	clicks.redraw = false;
+	theButton()->click();
+	settle();
+	tally.expect(clicks.clicked == 2 && clicks.properties == 2 && noted("Clicked 1 times."),
+		     "it answered false: nothing drawn again");
+	clicks.reloadInside = true;
+	theButton()->click();
+	settle();
+	tally.expect(clicks.clicked == 3 && clicks.properties == 3 && noted("Clicked 3 times."),
+		     "its settings changed while it ran: drawn anew once, after it returned");
+	clicks.reloadInside = false;
+	clicks.note = "Changed by the plugin.";
+	form->reload(); // what the dock does when a plugin calls sarxina_obs_plugin_manager_settings_changed
+	settle();
+	tally.expect(clicks.properties == 4 && noted("Changed by the plugin."), "a note the plugin changed, shown anew");
+	return tally.report("settings", "steps as expected");
+}
+
 // ---- the picture ----------------------------------------------------------------------------------------------------
 
 void picture(const char *folder)
@@ -1437,7 +2172,9 @@ void picture(const char *folder)
 	two.get_properties = nullptr;
 	two.description = "Switched off, and with no settings.";
 
-	Manager manager(Manager::Use::SelfTest, twitch.url(), setupFor(github, layout, &loaded, {}));
+	StandInTwitch points;
+	Manager manager(Manager::Use::SelfTest, twitch.url(), setupFor(github, layout, &loaded, {}),
+			twitchSetup(points, kClientId, {}, nullptr));
 	ManagerDock dock(manager);
 	manager.add(&one);
 	manager.add(&two);
@@ -1453,7 +2190,20 @@ void picture(const char *folder)
 		if (title->property("class").toString() == "indicator-expand" && title->text() == "Test plugin")
 			title->setChecked(false); // its description, unfolded
 
-	manager.followTwitchAccount("sarxina");
+	// Twitch: the code to enter, then connected, and the chat of the account connected
+	StandInTwitch::Request request;
+	manager.twitchApi().connectTwitch();
+	points.next(request);
+	points.reply(200, kDevice);
+	waitFor([&manager] { return manager.twitchApi().state() == TwitchApi::State::Waiting; });
+	const QString code = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock-code.png"));
+	test::report(dock.grab().save(code, "PNG"), "a picture of the dock with the code to enter in %s",
+		     code.toUtf8().constData());
+	points.next(request);
+	points.reply(200, kToken);
+	points.next(request);
+	points.reply(200, kValidate);
+	waitFor([&manager] { return manager.twitchApi().state() == TwitchApi::State::Ready; });
 	QByteArray cap, nick, join;
 	twitch.next(cap), twitch.next(nick), twitch.next(join);
 	twitch.send(":" + nick.mid(5) + "!x@x JOIN #sarxina");
@@ -1539,7 +2289,6 @@ bool online()
 bool runSelfTest(const char *picturesFolder)
 {
 	bool passed = parsing();
-	passed &= account();
 	passed &= checks();
 	passed &= routing();
 	passed &= twitchConnection();
@@ -1548,6 +2297,9 @@ bool runSelfTest(const char *picturesFolder)
 	passed &= zips();
 	passed &= installing();
 	passed &= theDock();
+	passed &= twitchApi();
+	passed &= twitchDock();
+	passed &= settingsForm();
 	passed &= online();
 	picture(picturesFolder);
 	test::report(passed, "%s", passed ? "passed" : "FAILED");
@@ -1562,6 +2314,24 @@ void checkInObs(Manager &manager)
 	for (const auto &plugin : manager.plugins())
 		names += (names.empty() ? "" : ", ") + std::string(plugin->info->name) + (plugin->enabled ? " (on)" : " (off)");
 	test::report(!names.empty(), "registered through OBS: %s", names.empty() ? "nothing" : names.c_str());
+
+	// Once Twitch is connected: the channel's rewards, asked through OBS the way a plugin asks. Only reads.
+	const TwitchApi &api = manager.twitchApi();
+	if (api.state() != TwitchApi::State::Ready) {
+		test::report(true, "Twitch: %s",
+			     api.state() == TwitchApi::State::NoApp ? "this build has no Twitch app id" : "not connected");
+	} else {
+		static const sarxina_twitch_request rewards{
+			"GET", "/channel_points/custom_rewards", nullptr,
+			[](void *, int status, const char *body) {
+				const QJsonArray data = QJsonDocument::fromJson(body).object().value("data").toArray();
+				test::report(status == 200, "Twitch, asked the way a plugin asks: %d, %d rewards%s%s", status,
+					     static_cast<int>(data.size()), status == 200 ? "" : ": ", status == 200 ? "" : body);
+			},
+			nullptr};
+		test::report(sarxina_obs_plugin_manager_twitch_request(&rewards), "a Twitch request sent through OBS as %s",
+			     api.login().toUtf8().constData());
+	}
 
 	static const sarxina_vts_request request{
 		"CurrentModelRequest", nullptr,
@@ -1594,13 +2364,86 @@ void checkInObs(Manager &manager)
 	});
 }
 
+// Inside OBS, with SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS=Connect:twitch: presses Connect next to Twitch in the dock
+// the way a click does (unless it is connected already), says in the log what the dock's Twitch line says each time it
+// changes, the code to enter included, and once it is connected, which rewards each plugin's settings offer. Only
+// reads from Twitch: no reward is made.
+static void connectInObs(ManagerDock &dock, Manager &manager)
+{
+	const auto label = [&dock](const char *name) {
+		QLabel *found = dock.findChild<QLabel *>(name);
+		return found && !found->isHidden() ? found->text() : QString();
+	};
+	QPushButton *connectButton = dock.findChild<QPushButton *>("twitch-button");
+	const TwitchApi::State at = manager.twitchApi().state();
+	if (connectButton && (at == TwitchApi::State::Off || at == TwitchApi::State::Reconnect)) {
+		test::report(true, "in OBS: pressing %s next to Twitch", connectButton->text().toUtf8().constData());
+		connectButton->click();
+	}
+	// Each plugin's reward dropdown, as its settings offer it.
+	const auto rewards = [&manager](bool say) {
+		for (const auto &plugin : manager.plugins()) {
+			if (!plugin->enabled || !plugin->info->get_properties)
+				continue;
+			obs_properties_t *properties = plugin->info->get_properties(plugin->info->data);
+			obs_property_t *reward = properties ? obs_properties_get(properties, "reward") : nullptr;
+			if (reward && say) {
+				QStringList names;
+				const size_t count = obs_property_list_item_count(reward);
+				for (size_t i = 0; i < count; i++)
+					names << QString::fromUtf8(obs_property_list_item_name(reward, i));
+				obs_property_t *help = obs_properties_get(properties, "reward_help");
+				test::report(count > 1, "in OBS, %s's reward dropdown: %d lines: %s (under it: %s)",
+					     plugin->info->name, static_cast<int>(count), names.join(" | ").toUtf8().constData(),
+					     help ? obs_property_description(help) : "nothing");
+			}
+			obs_properties_destroy(properties);
+		}
+	};
+	auto *timer = new QTimer(&dock);
+	auto last = std::make_shared<QString>();
+	auto ready = std::make_shared<int>(0); // ticks since it was connected
+	QObject::connect(timer, &QTimer::timeout, &dock, [=, &manager] {
+		const QString now = label("twitch-state") + " | " + label("twitch-chat");
+		if (now != *last) {
+			*last = now;
+			test::report(true, "in OBS, the dock's Twitch line: %s", now.toUtf8().constData());
+		}
+		const TwitchApi::State state = manager.twitchApi().state();
+		if (state == TwitchApi::State::Off || state == TwitchApi::State::NoApp || state == TwitchApi::State::Reconnect) {
+			test::report(false, "in OBS: Twitch did not connect");
+			timer->stop();
+			timer->deleteLater();
+			return;
+		}
+		if (state != TwitchApi::State::Ready)
+			return;
+		const int tick = ++*ready;
+		if (tick == 1) {
+			test::report(true, "in OBS: Twitch connected as %s", manager.twitchApi().login().toUtf8().constData());
+			rewards(false); // asks Twitch for the rewards
+		} else if (tick == 16) {
+			rewards(true); // four seconds later, what the dropdowns offer
+		} else if (tick == 40) {
+			timer->stop();
+			timer->deleteLater();
+		}
+	});
+	timer->start(250);
+}
+
 // Inside OBS, with SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS=<button>:<plugin> ("Install:slinglive",
 // "Uninstall:slinglive", "Update:plinkolive"), or "-" to press nothing: once the list is there, says in the log what
 // the dock shows for every plugin, presses that button in the dock the way a click does, and once it has settled says
 // again what the dock shows. With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES, it paints the dock and the dropdown.
+// "Connect:twitch" connects Twitch instead (connectInObs).
 void pressInObs(ManagerDock &dock, Manager &manager, const QString &pressing, const QString &pictures)
 {
 	const QString which = pressing.section(':', 0, 0), id = pressing.section(':', 1);
+	if (which == "Connect" && id == "twitch") {
+		connectInObs(dock, manager);
+		return;
+	}
 	const auto describe = [&dock, &manager](const char *when) {
 		for (QAction *action : dropdown(dock) ? dropdown(dock)->actions() : QList<QAction *>()) {
 			auto *widget = qobject_cast<QWidgetAction *>(action);

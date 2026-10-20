@@ -1,5 +1,9 @@
 #include "paper-prop.hpp"
 
+#include "paper-item.hpp"
+
+#include <QDir>
+#include <QFile>
 #include <QJsonArray>
 #include <QRandomGenerator>
 #include <QRegularExpression>
@@ -16,6 +20,7 @@ namespace {
 // be loaded right now because the streamer has its menus open.
 constexpr int kNeedsPermission = 9;
 constexpr int kCannotLoadNow = 753;
+constexpr int kNoSuchItem = 751;
 
 // An ArtMesh ID read as lower-case words: "ChestLosangeMiddle" -> chest, losange, middle; "L_InnerOutfit_Chest2" ->
 // l, inner, outfit, chest.
@@ -109,7 +114,7 @@ QString pinTarget(const QStringList &artMeshes)
 
 // ---- the requests ---------------------------------------------------------------------------------------------------
 
-QJsonObject loadRequest(const QByteArray &png, double size, double rotation, double x, double y)
+QJsonObject loadRequest(const QByteArray &png, double size, double rotation, double x, double y, int order)
 {
 	return {
 		{QStringLiteral("fileName"), QString::fromLatin1(kPictureName)},
@@ -118,7 +123,7 @@ QJsonObject loadRequest(const QByteArray &png, double size, double rotation, dou
 		{QStringLiteral("size"), std::clamp(size, 0.0, 1.0)},
 		{QStringLiteral("rotation"), rotation},
 		{QStringLiteral("fadeTime"), kFadeSeconds},
-		{QStringLiteral("order"), kOrder},
+		{QStringLiteral("order"), order},
 		{QStringLiteral("failIfOrderTaken"), false},
 		{QStringLiteral("smoothing"), 0},
 		{QStringLiteral("censored"), false},
@@ -132,6 +137,32 @@ QJsonObject loadRequest(const QByteArray &png, double size, double rotation, dou
 		{QStringLiteral("customDataSkipAskingUserIfWhitelisted"), true},
 		{QStringLiteral("customDataAskTimer"), -1},
 	};
+}
+
+// The Live2D item, by the name of its folder: nothing of it is sent, VTube Studio reads it from its Items folder.
+QJsonObject itemLoadRequest(const QString &item, double size, double rotation, double x, double y, int order)
+{
+	QJsonObject request = loadRequest({}, size, rotation, x, y, order);
+	request.insert(QStringLiteral("fileName"), item);
+	request.insert(QStringLiteral("customDataBase64"), QString());
+	return request;
+}
+
+// The item files VTube Studio has (it reads its Items folder again for this), only that one if it has it.
+QJsonObject itemFilesRequest(const QString &item)
+{
+	return {
+		{QStringLiteral("includeAvailableSpots"), false},
+		{QStringLiteral("includeItemInstancesInScene"), false},
+		{QStringLiteral("includeAvailableItemFiles"), true},
+		{QStringLiteral("onlyItemsWithFileName"), item},
+		{QStringLiteral("onlyItemsWithInstanceID"), QString()},
+	};
+}
+
+QJsonObject folderRequest()
+{
+	return {};
 }
 
 QJsonObject pinRequest(const QString &instance, const QString &model, const QString &artMesh, double size, double tilt)
@@ -158,15 +189,42 @@ QJsonObject pinRequest(const QString &instance, const QString &model, const QStr
 	};
 }
 
-QJsonObject unloadRequest(const QString &instance)
+QJsonObject unloadRequest(const QStringList &instances)
 {
+	QJsonArray ids;
+	for (const QString &instance : instances)
+		ids << instance;
 	return {
 		{QStringLiteral("unloadAllInScene"), false},
 		{QStringLiteral("unloadAllLoadedByThisPlugin"), false}, // "this plugin" is the manager, for every plugin
 		{QStringLiteral("allowUnloadingItemsLoadedByUserOrOtherPlugins"), false},
-		{QStringLiteral("instanceIDs"), QJsonArray{instance}},
+		{QStringLiteral("instanceIDs"), ids},
 		{QStringLiteral("fileNames"), QJsonArray{}},
 	};
+}
+
+QJsonObject unpinRequest(const QString &instance)
+{
+	return {{QStringLiteral("pin"), false}, {QStringLiteral("itemInstanceID"), instance}};
+}
+
+// -1000 leaves a value as it is.
+QJsonObject moveAwayRequest(const QString &instance)
+{
+	return {{QStringLiteral("itemsToMove"),
+		 QJsonArray{QJsonObject{
+			 {QStringLiteral("itemInstanceID"), instance},
+			 {QStringLiteral("timeInSeconds"), 0},
+			 {QStringLiteral("fadeMode"), QStringLiteral("linear")},
+			 {QStringLiteral("positionX"), 50},
+			 {QStringLiteral("positionY"), 50},
+			 {QStringLiteral("size"), -1000},
+			 {QStringLiteral("rotation"), -1000},
+			 {QStringLiteral("order"), -1000},
+			 {QStringLiteral("setFlip"), false},
+			 {QStringLiteral("flip"), false},
+			 {QStringLiteral("userCanStop"), false},
+		 }}}};
 }
 
 QJsonObject listRequest(const QString &instance)
@@ -187,7 +245,7 @@ QJsonObject permissionRequest()
 
 // ---- up and down ----------------------------------------------------------------------------------------------------
 
-PaperProp::PaperProp(Send send) : tilt(randomTilt), send_(std::move(send)) {}
+PaperProp::PaperProp(Send send) : tilt(randomTilt), findItems(findItemsFolder), send_(std::move(send)) {}
 
 void PaperProp::toggle()
 {
@@ -214,14 +272,38 @@ void PaperProp::stop()
 	step_ = Step::Idle;
 }
 
+void PaperProp::rewrite()
+{
+	stale_ = true;
+	go();
+}
+
 void PaperProp::go()
 {
 	if (stopped_ || busy())
 		return;
-	if (wanted_ && !shown())
+	if (wanted_ && !shown()) {
+		stale_ = false; // it comes up with the newest writing
 		askModel();
-	else if (!wanted_ && shown())
+	} else if (!wanted_ && shown()) {
 		unload();
+	} else if (wanted_ && shown() && stale_) {
+		if (writing == showing_)
+			stale_ = false; // it went up with the newest writing already
+		else
+			swap();
+	}
+}
+
+// New writing for the paper that is up: the same model, ArtMesh and tilt, one place behind it.
+void PaperProp::swap()
+{
+	stale_ = false;
+	old_ = instance_;
+	oldBends_ = bends_;
+	behind_ = order_ > 1;
+	order_ = behind_ ? order_ - 1 : kOrder;
+	load();
 }
 
 void PaperProp::finish(bool)
@@ -292,7 +374,7 @@ void PaperProp::askMeshes()
 
 void PaperProp::load()
 {
-	if (png_.isEmpty()) {
+	if (!hasPicture()) {
 		say(QStringLiteral("no picture of the paper"));
 		wanted_ = false;
 		finish(false);
@@ -300,31 +382,131 @@ void PaperProp::load()
 	}
 	if (!wanted_) { // taken back while waiting to try again
 		tries_ = 0;
-		finish(true);
+		waitingForMenus_ = false;
+		finish(true); // and down, with the paper it was to replace
 		return;
 	}
-	tilt_ = tilt ? tilt() : 0;
-	send(Step::Load, "ItemLoadRequest", loadRequest(png_, size_, tilt_, modelX_, modelY_),
+	loading_ = writing;
+	if (old_.isEmpty()) {
+		tilt_ = tilt ? tilt() : 0;
+		order_ = kOrder;
+	}
+	if (live2d && !itemFailed_ && !texture_.isEmpty())
+		loadItem();
+	else
+		loadPicture();
+}
+
+void PaperProp::loadItem()
+{
+	if (itemsName_.isEmpty()) {
+		send(Step::Folder, "VTSFolderInfoRequest", folderRequest(), [this](bool ok, const QJsonObject &data) {
+			itemsName_ = ok ? data.value(QStringLiteral("items")).toString() : QString();
+			if (itemsName_.isEmpty())
+				itemsName_ = QStringLiteral("Items");
+			loadItem();
+		});
+		return;
+	}
+	const QString folder = findItems ? findItems(itemsName_) : QString();
+	if (folder.isEmpty()) {
+		fallBack(QStringLiteral("VTube Studio's %1 folder was not found").arg(itemsName_));
+		return;
+	}
+	if (itemFor_.isEmpty() || itemFor_ != texture_) {
+		item_ = paperItem(texture_);
+		itemFor_ = texture_;
+	}
+	const PaperItem &item = item_;
+	// The new writing into the item's folder (only what changed: the texture, usually), or the whole item the first
+	// time. The streamer's settings for it stay as they are.
+	const bool there = QFile::exists(QDir(folder).filePath(item.name + QStringLiteral("/") + QLatin1String(kItemBase) +
+							       QStringLiteral(".vtube.json")));
+	QString why;
+	if (!installItem(folder, item, why)) {
+		fallBack(why);
+		return;
+	}
+	if (!there)
+		say(QStringLiteral("the paper written to %1 as the Live2D item %2")
+			    .arg(QDir::toNativeSeparators(folder), item.name));
+	itemsFolder_ = folder;
+	itemName_ = item.name;
+	listed_ = 0;
+	listItem();
+}
+
+void PaperProp::listItem()
+{
+	send(Step::Listing, "ItemListRequest", itemFilesRequest(itemName_), [this](bool ok, const QJsonObject &data) {
+		bool seen = false;
+		for (const QJsonValue &file : data.value(QStringLiteral("availableItemFiles")).toArray()) {
+			const QJsonObject item = file.toObject();
+			seen = seen || (item.value(QStringLiteral("fileName")).toString() == itemName_ &&
+					item.value(QStringLiteral("type")).toString() == QStringLiteral("Live2D"));
+		}
+		if (seen) {
+			send(Step::Load, "ItemLoadRequest", itemLoadRequest(itemName_, itemSize(), tilt_, modelX_, modelY_, order_),
+			     [this](bool loaded, const QJsonObject &answer) { itemLoaded(loaded, answer); });
+			return;
+		}
+		if (!ok && disconnected(data)) {
+			fallBack(message(data)); // and that fails the same way, and says so
+			return;
+		}
+		if (++listed_ < listTries) {
+			step_ = Step::Listing;
+			const uint64_t generation = generation_;
+			QTimer::singleShot(listRetryMs, this, [this, generation] {
+				if (generation == generation_ && !stopped_)
+					wanted_ ? listItem() : finish(true);
+			});
+			return;
+		}
+		fallBack(ok ? QStringLiteral("VTube Studio does not list it in its items")
+			    : QStringLiteral("VTube Studio: %1").arg(message(data)));
+	});
+}
+
+void PaperProp::itemLoaded(bool ok, const QJsonObject &data)
+{
+	if (ok) {
+		bends_ = true;
+		const bool replacing = !old_.isEmpty();
+		up(data);
+		if (!replacing) // else once the paper it replaces is down
+			if (const int removed = removeOldItems(itemsFolder_, itemName_))
+				say(QStringLiteral("took %1 older paper item%2 out of the Items folder").arg(removed).arg(removed == 1 ? "" : "s"));
+		return;
+	}
+	if (errorId(data) == kCannotLoadNow) {
+		waitForMenus();
+		return;
+	}
+	if (errorId(data) != kNoSuchItem)
+		itemFailed_ = true; // it read the item and would not have it: no use asking again
+	fallBack(QStringLiteral("VTube Studio did not load it: %1").arg(message(data)));
+}
+
+void PaperProp::fallBack(const QString &why)
+{
+	say(QStringLiteral("the paper as a Live2D item: %1. It comes up as a picture instead, which does not bend").arg(why));
+	loadPicture();
+}
+
+void PaperProp::loadPicture()
+{
+	bends_ = false;
+	send(Step::Load, "ItemLoadRequest", loadRequest(picture(), size_, tilt_, modelX_, modelY_, order_),
 	     [this](bool ok, const QJsonObject &data) { loaded(ok, data); });
 }
 
 void PaperProp::loaded(bool ok, const QJsonObject &data)
 {
 	if (ok) {
-		tries_ = 0;
-		instance_ = data.value(QStringLiteral("instanceID")).toString();
-		if (instance_.isEmpty()) {
-			say(QStringLiteral("VTube Studio loaded the paper but gave no instance ID"));
-			wanted_ = false;
-			finish(false);
-		} else if (!wanted_) {
-			unload(); // taken back while it loaded
-		} else {
-			pin();
-		}
+		up(data);
 		return;
 	}
-
 	const int error = errorId(data);
 	if (error == kNeedsPermission) {
 		if (askedPermission_) {
@@ -352,12 +534,46 @@ void PaperProp::loaded(bool ok, const QJsonObject &data)
 		return;
 	}
 	if (error == kCannotLoadNow) {
-		retryLoad(QStringLiteral("VTube Studio cannot load items while its menus are open"));
+		waitForMenus();
 		return;
 	}
 	say(QStringLiteral("VTube Studio did not load the paper: %1").arg(message(data)));
+	if (!old_.isEmpty()) { // the old paper stays up
+		old_.clear();
+		bends_ = oldBends_;
+		finish(false);
+		return;
+	}
 	wanted_ = false;
 	finish(false);
+}
+
+// Loaded, the Live2D item or the picture: pinned, unless it was taken back meanwhile.
+void PaperProp::up(const QJsonObject &data)
+{
+	tries_ = 0;
+	if (waitingForMenus_)
+		say(QStringLiteral("VTube Studio's menu or popup is closed"));
+	waitingForMenus_ = false;
+	const QString loaded = data.value(QStringLiteral("instanceID")).toString();
+	if (loaded.isEmpty() && !old_.isEmpty()) {
+		say(QStringLiteral("VTube Studio loaded the new writing but gave no instance ID; the paper stays as it was"));
+		old_.clear();
+		bends_ = oldBends_;
+		finish(false);
+		return;
+	}
+	instance_ = loaded;
+	if (instance_.isEmpty()) {
+		say(QStringLiteral("VTube Studio loaded the paper but gave no instance ID"));
+		bends_ = false;
+		wanted_ = false;
+		finish(false);
+	} else if (!wanted_) {
+		unload(); // taken back while it loaded
+	} else {
+		pin();
+	}
 }
 
 void PaperProp::retryLoad(const QString &why)
@@ -379,34 +595,109 @@ void PaperProp::retryLoad(const QString &why)
 	});
 }
 
+// VTube Studio has a menu or a popup open. Tried again, gently, for as long as the paper is wanted; a toggle meanwhile
+// takes it back (load() sees that).
+void PaperProp::waitForMenus()
+{
+	if (!waitingForMenus_)
+		say(QStringLiteral("VTube Studio has a menu or popup open, so it can't load the paper yet. It comes up as soon "
+				   "as that's closed"));
+	waitingForMenus_ = true;
+	step_ = Step::Load;
+	const uint64_t generation = generation_;
+	QTimer::singleShot(menusRetryMs, this, [this, generation] {
+		if (generation == generation_ && !stopped_)
+			load();
+	});
+}
+
 void PaperProp::pin()
 {
 	const QString artMesh = pins_[model_];
 	if (artMesh.isEmpty()) {
-		say(QStringLiteral("the paper is up, not pinned"));
+		say(old_.isEmpty() ? QStringLiteral("the paper is up, not pinned") : QStringLiteral("new writing is up, not pinned"));
+		if (!old_.isEmpty()) {
+			swapped();
+			return;
+		}
+		showing_ = loading_;
+		if (wrote)
+			wrote(loading_);
 		finish(true);
 		return;
 	}
-	send(Step::Pin, "ItemPinRequest", pinRequest(instance_, model_, artMesh, size_, tilt_),
+	send(Step::Pin, "ItemPinRequest", pinRequest(instance_, model_, artMesh, bends_ ? itemSize() : size_, tilt_),
 	     [this, artMesh](bool ok, const QJsonObject &data) {
 		     if (ok) {
 			     pinnedTo_ = artMesh;
-			     say(QStringLiteral("the paper is up, pinned to %1, tilted %2 degrees")
-					 .arg(artMesh)
-					 .arg(tilt_, 0, 'f', 1));
+			     if (old_.isEmpty())
+				     say(QStringLiteral("the paper is up%3, pinned to %1, tilted %2 degrees")
+						 .arg(artMesh)
+						 .arg(tilt_, 0, 'f', 1)
+						 .arg(bends_ ? QStringLiteral(" as the Live2D item ") + itemName_
+							     : QStringLiteral(" as a picture")));
 		     } else {
 			     say(QStringLiteral("the paper is up but VTube Studio did not pin it: %1").arg(message(data)));
 		     }
+		     if (!old_.isEmpty()) {
+			     swapped();
+			     return;
+		     }
+		     showing_ = loading_;
+		     if (wrote)
+			     wrote(loading_);
 		     finish(true);
 	     });
 }
 
+// The new writing is up and pinned: once it has settled behind the old paper (or faded in, in front of it), the old
+// paper goes.
+void PaperProp::swapped()
+{
+	step_ = Step::Unload;
+	const uint64_t generation = generation_;
+	QTimer::singleShot(behind_ ? settleMs : static_cast<int>(kFadeSeconds * 1000) + 150, this, [this, generation] {
+		if (generation == generation_ && !stopped_)
+			takeOldAway();
+	});
+}
+
+// Off the picture first, so that VTube Studio's shrink as it unloads an item is not seen in front of the new paper;
+// whatever VTube Studio answers, the old paper goes.
+void PaperProp::takeOldAway()
+{
+	send(Step::Unload, "ItemPinRequest", unpinRequest(old_), [this](bool, const QJsonObject &) {
+		send(Step::Unload, "ItemMoveRequest", moveAwayRequest(old_), [this](bool, const QJsonObject &) {
+			send(Step::Unload, "ItemUnloadRequest", unloadRequest({old_}),
+			     [this](bool ok, const QJsonObject &data) { oldGone(ok, data); });
+		});
+	});
+}
+
+void PaperProp::oldGone(bool ok, const QJsonObject &data)
+{
+	if (!ok)
+		say(QStringLiteral("taking the old writing down: %1").arg(message(data)));
+	old_.clear();
+	say(QStringLiteral("new writing is up%1").arg(bends_ ? QStringLiteral(" as the Live2D item ") + itemName_
+							     : QStringLiteral(" as a picture")));
+	showing_ = loading_;
+	if (wrote)
+		wrote(loading_);
+	finish(true);
+}
+
 void PaperProp::unload()
 {
-	send(Step::Unload, "ItemUnloadRequest", unloadRequest(instance_), [this](bool ok, const QJsonObject &data) {
+	QStringList up{instance_};
+	if (!old_.isEmpty() && old_ != instance_)
+		up << old_; // taken back while new writing went up: both go
+	old_.clear();
+	send(Step::Unload, "ItemUnloadRequest", unloadRequest(up), [this](bool ok, const QJsonObject &data) {
 		say(ok ? QStringLiteral("the paper is down") : QStringLiteral("taking the paper down: %1").arg(message(data)));
 		instance_.clear();
 		pinnedTo_.clear();
+		bends_ = false;
 		finish(ok);
 	});
 }
@@ -428,10 +719,20 @@ void PaperProp::check()
 			say(QStringLiteral("the paper is no longer in VTube Studio"));
 			instance_.clear();
 			pinnedTo_.clear();
+			bends_ = false;
 			wanted_ = false;
 		}
 		finish(true);
 	});
+}
+
+const QByteArray &PaperProp::picture()
+{
+	if (png_.isEmpty() && paintPicture_) {
+		png_ = paintPicture_();
+		paintPicture_ = nullptr;
+	}
+	return png_;
 }
 
 void PaperProp::say(const QString &line)

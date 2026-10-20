@@ -9,6 +9,7 @@
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
 #include <QPushButton>
@@ -59,10 +60,19 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	auto *grid = new QGridLayout(connections);
 	grid->setColumnStretch(1, 1);
 
-	// Twitch: no settings of its own, it follows the account OBS is connected to.
+	// Twitch: the one connection every plugin's chat and channel points go through, which the streamer makes here.
 	twitchState_ = plain(QString(), connections);
+	twitchState_->setObjectName(QStringLiteral("twitch-state"));
+	twitchButton_ = new QPushButton(connections);
+	twitchButton_->setObjectName(QStringLiteral("twitch-button"));
+	chatState_ = plain(QString(), connections);
+	chatState_->setObjectName(QStringLiteral("twitch-chat"));
+	auto *twitch = new QHBoxLayout; // the words take the whole line when there is no button
+	twitch->addWidget(twitchState_, 1);
+	twitch->addWidget(twitchButton_);
 	grid->addWidget(plain(text("Twitch"), connections), 0, 0);
-	grid->addWidget(twitchState_, 0, 1, 1, 2);
+	grid->addLayout(twitch, 0, 1, 1, 2);
+	grid->addWidget(chatState_, 1, 1, 1, 2);
 
 	port_ = new QSpinBox(connections);
 	port_->setRange(1, 65535);
@@ -71,12 +81,14 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	vtsState_ = plain(QString(), connections);
 	QLabel *vts = plain(text("VTubeStudio"), connections);
 	vts->setBuddy(port_);
-	grid->addWidget(vts, 1, 0);
-	grid->addWidget(port_, 1, 1);
-	grid->addWidget(vtsButton_, 1, 2);
-	grid->addWidget(vtsState_, 2, 1, 1, 2);
+	grid->addWidget(vts, 2, 0);
+	grid->addWidget(port_, 2, 1);
+	grid->addWidget(vtsButton_, 2, 2);
+	grid->addWidget(vtsState_, 3, 1, 1, 2);
 	layout->addWidget(connections);
 
+	connect(twitchButton_, &QPushButton::clicked, this, &ManagerDock::pressTwitch);
+	connect(&manager.twitchApi(), &TwitchApi::stateChanged, this, &ManagerDock::showTwitch);
 	connect(&manager.twitch(), &TwitchChat::stateChanged, this, &ManagerDock::showTwitch);
 	connect(vtsButton_, &QPushButton::clicked, this, &ManagerDock::pressVts);
 	connect(&manager.vts(), &VTubeStudio::stateChanged, this, &ManagerDock::showVts);
@@ -125,23 +137,71 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 
 // ---- connections ----------------------------------------------------------------------------------------------------
 
+void ManagerDock::pressTwitch()
+{
+	TwitchApi &api = manager_.twitchApi();
+	switch (api.state()) {
+	case TwitchApi::State::Off:
+	case TwitchApi::State::Reconnect: api.connectTwitch(); break;
+	case TwitchApi::State::Waiting: api.openActivation(); break;
+	case TwitchApi::State::Ready: api.disconnectTwitch(); break;
+	default: break;
+	}
+}
+
 void ManagerDock::showTwitch()
 {
-	const QString channel = manager_.twitch().channel();
-	switch (manager_.twitch().state()) {
-	case TwitchChat::State::Off: // the OBS profile has no Twitch account
-		twitchState_->setText(text("Twitch.NoAccount"));
+	const TwitchApi &api = manager_.twitchApi();
+	const auto why = [&api] {
+		switch (api.why()) {
+		case TwitchApi::Why::Unreachable: return text("Twitch.Unreachable");
+		case TwitchApi::Why::Expired: return text("Twitch.Expired");
+		case TwitchApi::Why::Denied: return text("Twitch.Denied");
+		case TwitchApi::Why::Refused: return text("Twitch.Refused");
+		case TwitchApi::Why::Scope: return text("Twitch.Scope");
+		case TwitchApi::Why::SignedOut: return text("Twitch.SignedOut");
+		case TwitchApi::Why::Nothing: break;
+		}
+		return text("Off");
+	};
+	const char *button = nullptr;
+	switch (api.state()) {
+	case TwitchApi::State::NoApp: twitchState_->setText(text("Twitch.NoApp")); break;
+	case TwitchApi::State::Off:
+		twitchState_->setText(why());
+		button = "Connect";
 		break;
-	case TwitchChat::State::Connecting:
-		twitchState_->setText(text("Twitch.Connecting").arg(channel));
+	case TwitchApi::State::Connecting: twitchState_->setText(text("Twitch.Connecting")); break;
+	case TwitchApi::State::Waiting:
+		twitchState_->setText(text("Twitch.Code").arg(api.userCode()));
+		button = "Open";
 		break;
-	case TwitchChat::State::Reading:
-		twitchState_->setText(text("Twitch.Reading").arg(channel));
+	case TwitchApi::State::Ready:
+		twitchState_->setText(text("Twitch.Connected").arg(api.login()));
+		button = "Disconnect";
 		break;
-	case TwitchChat::State::Retrying:
-		twitchState_->setText(text("Twitch.Retrying"));
+	case TwitchApi::State::Reconnect:
+		twitchState_->setText(text("Twitch.Reconnect").arg(why()));
+		button = "Reconnect";
 		break;
 	}
+	// The code can be copied.
+	twitchState_->setTextInteractionFlags(api.state() == TwitchApi::State::Waiting ? Qt::TextSelectableByMouse
+										   : Qt::NoTextInteraction);
+	twitchButton_->setText(button ? text(button) : QString());
+	twitchButton_->setVisible(button != nullptr);
+
+	// Under it, the chat of the account connected.
+	const QString channel = manager_.twitch().channel();
+	QString chat;
+	switch (manager_.twitch().state()) {
+	case TwitchChat::State::Off: break;
+	case TwitchChat::State::Connecting: chat = text("Chat.Connecting").arg(channel); break;
+	case TwitchChat::State::Reading: chat = text("Chat.Reading").arg(channel); break;
+	case TwitchChat::State::Retrying: chat = text("Chat.Retrying"); break;
+	}
+	chatState_->setText(chat);
+	chatState_->setVisible(!chat.isEmpty());
 }
 
 void ManagerDock::pressVts()

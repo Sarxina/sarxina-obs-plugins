@@ -18,10 +18,11 @@ constexpr const char *kLog = "[Sarxina OBS Plugin Manager]";
 
 } // namespace
 
-Manager::Manager(Use use, const QString &twitchServer, Store::Setup store)
+Manager::Manager(Use use, const QString &twitchServer, Store::Setup store, TwitchApi::Setup twitchApi)
 	: use_(use),
 	  store_(std::move(store)),
-	  twitch_(twitchServer)
+	  twitch_(twitchServer),
+	  twitchApi_(std::move(twitchApi))
 {
 	clock_.start();
 	load();
@@ -30,6 +31,7 @@ Manager::Manager(Use use, const QString &twitchServer, Store::Setup store)
 			setEnabled(*plugin, on);
 	});
 	connect(&twitch_, &TwitchChat::message, this, &Manager::route);
+	connect(&twitchApi_, &TwitchApi::stateChanged, this, &Manager::followConnection);
 	connect(&vts_, &VTubeStudio::tokenChanged, this, [this](const QString &token) {
 		vtsToken_ = token;
 		save();
@@ -107,14 +109,9 @@ void Manager::followTwitchAccount(const QString &account)
 		twitch_.join(account);
 }
 
-QString twitchAccount(config_t *profile)
+void Manager::followConnection()
 {
-	if (!profile)
-		return {};
-	const char *type = config_get_string(profile, "Auth", "Type");
-	const char *name = config_get_string(profile, "Twitch", "Name");
-	const QString account = QString::fromUtf8(name ? name : "");
-	return type && std::strcmp(type, "Twitch") == 0 && TwitchChat::validChannel(account) ? account : QString();
+	followTwitchAccount(twitchApi_.state() == TwitchApi::State::Ready ? twitchApi_.login() : QString());
 }
 
 void Manager::route(const ChatMessage &message)
@@ -166,11 +163,30 @@ void Manager::vtsRequest(const sarxina_vts_request &request)
 	vts_.request(QString::fromUtf8(request.type), data, answer);
 }
 
+// ---- Twitch's API ---------------------------------------------------------------------------------------------------
+
+void Manager::twitchRequest(const sarxina_twitch_request &request)
+{
+	if (closed_ || !request.done)
+		return;
+	// The plugin's strings last only for this call: copied here.
+	const auto done = request.done;
+	void *param = request.param;
+	twitchApi_.request(QString::fromUtf8(request.method ? request.method : ""),
+			   QString::fromUtf8(request.path ? request.path : ""), QByteArray(request.body ? request.body : ""),
+			   [this, done, param](int status, const QByteArray &body) {
+				   if (!closed_)
+					   done(param, status, body.constData());
+			   });
+}
+
 // ---- starting, stopping, remembering --------------------------------------------------------------------------------
 
 void Manager::start()
 {
 	store_.start();
+	twitchApi_.start();
+	followConnection();
 	if (vtsOn_ && !vtsToken_.isEmpty()) // never asks VTube Studio for a new token on its own
 		vts_.connectTo(vtsPort_, vtsToken_, false);
 }
@@ -180,6 +196,7 @@ void Manager::shutDown()
 	closed_ = true;
 	store_.shutDown();
 	twitch_.leave();
+	twitchApi_.shutDown();
 	vts_.disconnect();
 }
 

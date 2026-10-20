@@ -1,5 +1,6 @@
 #include "jobapplication.hpp"
 
+#include "paper-item.hpp"
 #include "paper.hpp"
 
 #include <obs-module.h>
@@ -31,6 +32,11 @@ QByteArray utf8(const QString &text)
 	return text.toUtf8();
 }
 
+QString text(const char *key)
+{
+	return QString::fromUtf8(obs_module_text(key));
+}
+
 sarxina_plugin_info info = {
 	SARXINA_OBS_PLUGIN_MANAGER_API,
 	PLUGIN_NAME,
@@ -45,6 +51,13 @@ sarxina_plugin_info info = {
 	0,
 	[](void *data, const sarxina_chat_message *message) { self(data)->chat(*message); },
 };
+
+// The button in the settings. Nothing in them changes, so the manager need not draw them again.
+bool clearPressed(obs_properties_t *, obs_property_t *, void *data)
+{
+	self(data)->clear();
+	return false;
+}
 
 // On OBS's hotkey thread: over to the UI thread, where everything else happens.
 void hotkeyPressed(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
@@ -82,15 +95,20 @@ bool sendToVts(const QString &type, const QJsonObject &data, PaperProp::Answer a
 	return true;
 }
 
-JobApplication::JobApplication() : form_(jobApplication()), prop_(sendToVts)
+JobApplication::JobApplication(PaperProp::Send send) : form_(jobApplication()), prop_(std::move(send))
 {
 	clock_.start();
-	load();
+	if (obs_initialized())
+		load();
 	prop_.said = [](const QString &line) { blog(LOG_INFO, "[%s] %s", PLUGIN_TITLE, utf8(line).constData()); };
+	prop_.wrote = [this](int writing) { wrote(writing); };
+	trigger_.changed = [this] { settingsChanged(); };
 	pump_.setInterval(kPumpMs);
 	connect(&pump_, &QTimer::timeout, this, &JobApplication::pump);
 	check_.setInterval(kCheckMs);
 	connect(&check_, &QTimer::timeout, this, [this] { prop_.check(); });
+	writeLater_.setSingleShot(true);
+	connect(&writeLater_, &QTimer::timeout, this, &JobApplication::write);
 }
 
 void JobApplication::start()
@@ -115,12 +133,22 @@ void JobApplication::start()
 	}
 }
 
+void JobApplication::runForTest(int gatherMs, int writeEveryMs)
+{
+	testing_ = true;
+	gatherMs_ = gatherMs;
+	writeEveryMs_ = writeEveryMs;
+	managed_ = true;
+	enabled_ = true;
+}
+
 void JobApplication::shutDown()
 {
 	save();
 	closed_ = true;
 	pump_.stop();
 	check_.stop();
+	writeLater_.stop();
 	prop_.stop(); // VTube Studio takes the paper down itself when the manager's connection closes
 	if (hotkey_ != OBS_INVALID_HOTKEY_ID) {
 		obs_hotkey_unregister(hotkey_);
@@ -138,10 +166,12 @@ void JobApplication::setEnabled(bool enabled)
 		pump_.start();
 		check_.start();
 		QTimer::singleShot(1000, this, [this] { paint(); }); // ready before the first toggle
+		trigger_.listRewards(true); // so that a redeem of a reward the manager made can be marked fulfilled
 	} else {
 		prop_.hide();
 		pump_.stop();
 		check_.stop();
+		writeLater_.stop();
 	}
 	blog(LOG_INFO, "[%s] %s", PLUGIN_TITLE, enabled ? "on" : "off");
 }
@@ -155,6 +185,7 @@ obs_properties_t *JobApplication::properties()
 	obs_property_t *size = obs_properties_add_int(properties, "size", obs_module_text("Size"), kLeastSize, kMostSize, 1);
 	obs_property_int_set_suffix(size, " %");
 	obs_property_set_long_description(size, obs_module_text("Size.Help"));
+	obs_properties_add_button2(properties, "clear", obs_module_text("Clear"), clearPressed, this);
 	return properties;
 }
 
@@ -182,6 +213,15 @@ void JobApplication::update(obs_data_t *settings)
 		QTimer::singleShot(0, this, [] { sarxina_obs_plugin_manager_settings_changed(PLUGIN_NAME); });
 }
 
+// The trigger changed by itself (a reward made with the button) or has something new to show: kept, and drawn again
+// once the settings are done with what they are doing.
+void JobApplication::settingsChanged()
+{
+	save();
+	if (obs_initialized())
+		QTimer::singleShot(0, this, [] { sarxina_obs_plugin_manager_settings_changed(PLUGIN_NAME); });
+}
+
 void JobApplication::load()
 {
 	OBSDataAutoRelease config;
@@ -199,7 +239,7 @@ void JobApplication::load()
 
 void JobApplication::save() const
 {
-	if (closed_)
+	if (closed_ || testing_ || !obs_initialized())
 		return;
 	BPtr<char> folder(obs_module_config_path(""));
 	BPtr<char> path(obs_module_config_path("config.json"));
@@ -216,25 +256,103 @@ void JobApplication::save() const
 	obs_data_save_json_safe(config, path, "tmp", "bak");
 }
 
-// ---- chat and the toggle --------------------------------------------------------------------------------------------
+// ---- chat writes on it ----------------------------------------------------------------------------------------------
 
 void JobApplication::chat(const sarxina_chat_message &message)
 {
 	if (closed_ || !enabled_)
 		return;
-	QString who;
-	if (trigger_.hear(message, now(), ready(), who))
-		toggle(who);
-	if (trigger_.rewardsChanged()) // a new one to pick from, if the settings are open
-		QTimer::singleShot(0, this, [] { sarxina_obs_plugin_manager_settings_changed(PLUGIN_NAME); });
+	Heard heard;
+	if (trigger_.hear(message, now(), ready(), heard))
+		took(heard);
+	if (trigger_.rewardsChanged() && !trigger_.listed()) // a new one to pick from, if the settings are open
+		settingsChanged();
 }
 
 void JobApplication::pump()
 {
-	QString who;
-	if (trigger_.waiting() && trigger_.next(now(), ready(), who))
-		toggle(who);
+	Heard heard;
+	while (trigger_.waiting() && trigger_.next(now(), ready(), heard))
+		took(heard);
 }
+
+void JobApplication::took(const Heard &heard)
+{
+	if (!managed_) {
+		blog(LOG_WARNING, "[%s] the job application needs the Sarxina OBS Plugin Manager, which reaches VTube Studio",
+		     PLUGIN_TITLE);
+		return;
+	}
+	const QString line = writable(heard.text, kLongestEntry);
+	const QString by = writable(heard.who, kLongestSigned);
+	if (line.isEmpty()) {
+		blog(LOG_INFO, "[%s] %s wrote nothing that can go on the job application", PLUGIN_TITLE,
+		     utf8(by).constData());
+		return;
+	}
+	entries_.push_front({line, by});
+	if (entries_.size() > kEntriesKept)
+		entries_.pop_back();
+	if (!heard.rewardId.empty())
+		toFulfil_.emplace_back(painted_ + 1, heard); // the next painting has its line
+	dirty_ = true;
+	blog(LOG_INFO, "[%s] %s added to the job application's experience (%lld characters)", PLUGIN_TITLE,
+	     utf8(by).constData(), static_cast<long long>(line.size()));
+	if (!prop_.wanted()) { // down: up at once, with the line on it
+		writeLater_.stop();
+		paint();
+		prop_.show();
+		return;
+	}
+	writeSoon();
+}
+
+void JobApplication::clear()
+{
+	if (closed_)
+		return;
+	if (entries_.empty()) {
+		blog(LOG_INFO, "[%s] the job application is blank already", PLUGIN_TITLE);
+		return;
+	}
+	const size_t lines = entries_.size();
+	entries_.clear();
+	dirty_ = true;
+	blog(LOG_INFO, "[%s] the job application cleared: %lld line%s of experience taken off", PLUGIN_TITLE,
+	     static_cast<long long>(lines), lines == 1 ? "" : "s");
+	if (enabled_ && prop_.wanted()) // up: written blank like new writing; down: painted blank when it comes up
+		writeSoon();
+}
+
+// Lines that come close together are gathered and written together, and the paper is written at most every couple of
+// seconds, so a burst of chat is one new paper, not one for each line.
+void JobApplication::writeSoon()
+{
+	if (writeLater_.isActive())
+		return; // the write coming takes this line too
+	const double since = now() - lastWrite_;
+	writeLater_.start(static_cast<int>(std::max<double>(gatherMs_, writeEveryMs_ - since)));
+}
+
+void JobApplication::write()
+{
+	if (closed_ || !enabled_)
+		return;
+	paint();
+	prop_.rewrite();
+}
+
+void JobApplication::wrote(int writing)
+{
+	// Each redeem whose line is on the paper on screen now is done.
+	auto done = std::stable_partition(toFulfil_.begin(), toFulfil_.end(),
+					  [writing](const auto &waiting) { return waiting.first > writing; });
+	for (auto at = done; at != toFulfil_.end(); ++at)
+		trigger_.fulfil(at->second);
+	toFulfil_.erase(done, toFulfil_.end());
+}
+
+// ---- the hotkey -----------------------------------------------------------------------------------------------------
 
 void JobApplication::toggle(const QString &who)
 {
@@ -245,6 +363,7 @@ void JobApplication::toggle(const QString &who)
 		     PLUGIN_TITLE);
 		return;
 	}
+	writeLater_.stop(); // it comes up with every line so far, or goes
 	paint();
 	blog(LOG_INFO, "[%s] %s: the job application %s", PLUGIN_TITLE, utf8(who).constData(),
 	     prop_.wanted() ? "goes" : "comes up");
@@ -253,14 +372,23 @@ void JobApplication::toggle(const QString &who)
 
 void JobApplication::paint()
 {
-	if (prop_.hasPicture())
+	if (!dirty_ && prop_.hasPicture())
 		return;
 	QElapsedTimer took;
 	took.start();
-	const QByteArray picture = png(paintPicture(form_, kPaperSeed));
-	prop_.setPicture(picture);
-	blog(LOG_INFO, "[%s] the paper painted: %lld KB, in %lld ms", PLUGIN_TITLE,
-	     static_cast<long long>(picture.size() / 1024), static_cast<long long>(took.elapsed()));
+	form_.set("name", text("Form.ChatName"));
+	if (Field *experience = form_.field("experience"))
+		experience->bullets.assign(entries_.begin(), entries_.end());
+	const QImage sheet = paintSheet(form_, kPaperSeed);
+	const QByteArray texture = png(paperTexture(sheet), true); // for the Live2D item that bends
+	prop_.setTexture(texture);
+	prop_.setPicture([sheet] { return png(paintPicture(sheet)); }); // the flat picture, only if it is needed
+	prop_.writing = ++painted_;
+	dirty_ = false;
+	lastWrite_ = now();
+	blog(LOG_INFO, "[%s] the paper painted with %lld line%s of experience: %lld KB as the Live2D item's texture, in %lld ms",
+	     PLUGIN_TITLE, static_cast<long long>(entries_.size()), entries_.size() == 1 ? "" : "s",
+	     static_cast<long long>(texture.size() / 1024), static_cast<long long>(took.elapsed()));
 }
 
 } // namespace sarxina::jobapplication

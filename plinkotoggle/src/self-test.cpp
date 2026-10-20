@@ -4,7 +4,7 @@
 //      one has to come down in one slot within 15 seconds. A ball falls the same way with other balls falling beside
 //      it, so a seed always brings it to the same slot.
 //   2. Chat: the command and the redeem drop balls when they should, the cooldown, redeems waiting their turn, the
-//      rewards offered in the settings, and how a chatter's name is shown.
+//      rewards offered in the settings, the button that makes one, and how a chatter's name is shown.
 //   3. VTube Studio's answers read into toggles.
 //   4. How long a frame takes.
 // Given a folder, it also paints boards into PNG files there. Inside OBS, in-obs-check.cpp goes on from here.
@@ -15,8 +15,12 @@
 #include "toggle-board.hpp"
 #include "vts-toggles.hpp"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -246,6 +250,34 @@ bool chat()
 	tally.expect(!seen.rewardsChanged() && seen.rewards().size() == 2 && seen.rewards()[0].id == "reward-a" &&
 			     seen.rewards()[0].label == "Other: again",
 		     "the latest first, each once");
+
+	// The button that makes a reward on the channel (through a stand-in for Twitch): PlinkoToggle's own words, the
+	// cooldown, and the board showing the reward's name
+	ChatTrigger made{"plinko"};
+	std::vector<QJsonObject> posted;
+	made.twitch = [&posted](const char *method, const QString &, const QByteArray &body, TwitchAnswer done) {
+		const bool post = std::string(method) == "POST";
+		if (post)
+			posted.push_back(QJsonDocument::fromJson(body).object());
+		const QJsonObject answer{{"data", post ? QJsonArray{QJsonObject{{"id", "r-drop"},
+										 {"title", "Drop a Plinko ball"},
+										 {"is_user_input_required", true}}}
+						       : QJsonArray{}}};
+		QTimer::singleShot(0, [done, answer] { done(200, answer); });
+		return true;
+	};
+	made.createReward();
+	QElapsedTimer waited;
+	waited.start();
+	while (waited.elapsed() < 50)
+		QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+	tally.expect(posted.size() == 1 && posted[0].value("title").toString() == "Drop a Plinko ball" &&
+			     posted[0].value("is_user_input_required").toBool() &&
+			     posted[0].value("global_cooldown_seconds").toInt() == 10,
+		     "Create a new redeem: a reward that asks for text, with its title and the cooldown");
+	tally.expect(made.settings().trigger == TriggerSettings::Trigger::Reward && made.settings().rewardId == "r-drop" &&
+			     made.settings().rewardName == "Drop a Plinko ball",
+		     "picked, its name on the board");
 
 	// Names
 	const auto shown = [](const std::string &display, const std::string &user) {

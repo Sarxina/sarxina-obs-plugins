@@ -159,6 +159,39 @@ static inline bool sarxina_obs_plugin_manager_vts_request(const struct sarxina_v
 	return procs && proc_handler_call(procs, "sarxina_obs_plugin_manager_vts_request", &call);
 }
 
+/* ---- Twitch's API ------------------------------------------------------------------------------------------------ */
+
+/* A request to Twitch's Helix API (https://api.twitch.tv/helix) as the broadcaster, over the manager's own Twitch
+ * connection, which the streamer connects in the manager's dock and which may read and manage channel point rewards
+ * (channel:read:redemptions, channel:manage:redemptions). `method` is "GET", "POST", "PATCH" or "DELETE". `path`
+ * starts after /helix and may have a query: "/channel_points/custom_rewards?only_manageable_rewards=true". The manager
+ * adds broadcaster_id=<the connected broadcaster> to the query itself, and the Client-Id and the token. `body` is
+ * JSON, or NULL for none.
+ *
+ * `done` is called once, later, on OBS's UI thread, with Twitch's HTTP status and the body of its answer (JSON, as
+ * Twitch sent it, errors too: {"error": ..., "status": 403, "message": ...}). The status is 0 when the request never
+ * reached Twitch: the manager's Twitch connection is not made, lacks a scope, or Twitch could not be reached. The body
+ * then is {"message": "..."}, in the manager's words, fit to show the streamer. */
+struct sarxina_twitch_request {
+	const char *method;
+	const char *path;
+	const char *body;
+	void (*done)(void *param, int status, const char *body);
+	void *param;
+};
+
+/* Sends a request. False when the manager is not installed, or is a version without Twitch's API, and then `done` is
+ * never called. */
+static inline bool sarxina_obs_plugin_manager_twitch_request(const struct sarxina_twitch_request *request)
+{
+	proc_handler_t *procs = obs_get_proc_handler();
+	uint8_t stack[128];
+	calldata_t call;
+	calldata_init_fixed(&call, stack, sizeof(stack));
+	calldata_set_ptr(&call, "request", (void *)request);
+	return procs && proc_handler_call(procs, "sarxina_obs_plugin_manager_twitch_request", &call);
+}
+
 #ifdef __cplusplus
 }
 #endif

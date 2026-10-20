@@ -1,15 +1,21 @@
 #include "paper.hpp"
 
 #include <QBuffer>
+#include <QFontDatabase>
 #include <QFontMetricsF>
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
+#include <QRawFont>
+#include <QTextBoundaryFinder>
+#include <QTextLayout>
 #include <QTransform>
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
+#include <vector>
 
 namespace sarxina::jobapplication {
 
@@ -39,6 +45,18 @@ const QColor kRule(92, 98, 110);
 const QColor kBar(201, 211, 227);
 const QColor kBarText(31, 42, 61);
 const QColor kHand(27, 42, 110); // a blue pen, for what is written in
+const QColor kPencil(84, 88, 98); // who wrote each line of experience, signed in pencil
+
+// The handwriting, and after it fonts that have what it lacks: emoji, symbols, and the scripts Windows has fonts for.
+// Qt takes a character from the first of these that has it.
+const QStringList kHandFonts{QStringLiteral("Segoe Print"),        QStringLiteral("Ink Free"),
+			     QStringLiteral("Comic Sans MS"),      QStringLiteral("Segoe UI Emoji"),
+			     QStringLiteral("Segoe UI Symbol"),    QStringLiteral("Yu Gothic UI"),
+			     QStringLiteral("Microsoft YaHei UI"), QStringLiteral("Microsoft JhengHei UI"),
+			     QStringLiteral("Malgun Gothic"),      QStringLiteral("Nirmala UI"),
+			     QStringLiteral("Leelawadee UI"),      QStringLiteral("Ebrima"),
+			     QStringLiteral("Gadugi"),             QStringLiteral("Segoe UI Historic"),
+			     QStringLiteral("Segoe UI")};
 
 QFont printed(double pixels, bool bold = false, bool italic = false)
 {
@@ -54,7 +72,7 @@ QFont printed(double pixels, bool bold = false, bool italic = false)
 QFont handwritten(double pixels)
 {
 	QFont font;
-	font.setFamilies({QStringLiteral("Segoe Print"), QStringLiteral("Ink Free"), QStringLiteral("Comic Sans MS")});
+	font.setFamilies(kHandFonts);
 	font.setPixelSize(std::max(1, static_cast<int>(std::lround(pixels))));
 	font.setStyleStrategy(QFont::PreferAntialias);
 	return font;
@@ -202,6 +220,9 @@ private:
 			case Field::Kind::Choice:
 				bottom = std::max(bottom, choice(field, x, y, width));
 				break;
+			case Field::Kind::Bullets:
+				bottom = std::max(bottom, bullets(field, x, y, width));
+				break;
 			}
 			x += width + gap;
 		}
@@ -248,6 +269,68 @@ private:
 				written(text, QPointF(x + 10 * s(), baseline - 2 * s()), width - 20 * s());
 		}
 		return y + spacing * field.lines + 4 * s();
+	}
+
+	// Ruled lines with a bullet for each entry, the newest first: its text in pen and who wrote it in pencil, on one
+	// line or two. An entry that does not fit in the lines left, and every older one, is not drawn: it has scrolled
+	// off the bottom.
+	double bullets(const Field &field, double x, double y, double width)
+	{
+		const double spacing = 56 * s();
+		const auto baseline = [&](int line) { return y + spacing * (line + 1) - 14 * s(); };
+		for (int i = 0; i < field.lines; i++)
+			rule(x, x + width, baseline(i) + 4 * s());
+		const double indent = 34 * s(), room = width - indent - 8 * s();
+		int line = 0;
+		for (const Bullet &bullet : field.bullets) {
+			const QString whole =
+				bullet.text + (bullet.by.isEmpty() ? QString() : QStringLiteral(" \u2014 ") + bullet.by);
+			// On one line if it fits a little smaller, else as large as fits on two.
+			std::unique_ptr<QTextLayout> laid;
+			for (double size = 38 * s(); size >= 32 * s() && (!laid || laid->lineCount() > 1); size -= 2 * s())
+				laid = layOut(whole, handwritten(size), room, static_cast<int>(bullet.text.size()));
+			for (double size = 38 * s(); laid->lineCount() > 1; size -= 2 * s()) {
+				laid = layOut(whole, handwritten(size), room, static_cast<int>(bullet.text.size()));
+				if (laid->lineCount() <= 2 || size <= 22 * s())
+					break;
+			}
+			const int lines = std::min(laid->lineCount(), 2);
+			if (line + lines > field.lines)
+				break;
+			p_.setPen(Qt::NoPen);
+			p_.setBrush(kHand);
+			p_.drawEllipse(QPointF(x + 14 * s(), baseline(line) - 11 * s()), 4.5 * s(), 4.5 * s());
+			p_.setBrush(Qt::NoBrush);
+			p_.setPen(kHand);
+			for (int i = 0; i < lines; i++) {
+				const QTextLine text = laid->lineAt(i);
+				text.draw(&p_, QPointF(x + indent, baseline(line + i) - 2 * s() - text.ascent() - text.y()));
+			}
+			line += lines;
+		}
+		return y + spacing * field.lines + 4 * s();
+	}
+
+	// Text wrapped to `room`, at word boundaries where it can be and anywhere where it cannot (a long word, or a
+	// script written without spaces); from `penUpTo` on it is in pencil.
+	static std::unique_ptr<QTextLayout> layOut(const QString &text, const QFont &font, double room, int penUpTo)
+	{
+		auto layout = std::make_unique<QTextLayout>(text, font);
+		QTextOption option;
+		option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+		layout->setTextOption(option);
+		QTextCharFormat pencil;
+		pencil.setForeground(kPencil);
+		layout->setFormats({QTextLayout::FormatRange{penUpTo, static_cast<int>(text.size()) - penUpTo, pencil}});
+		layout->beginLayout();
+		double at = 0;
+		for (QTextLine line = layout->createLine(); line.isValid(); line = layout->createLine()) {
+			line.setLineWidth(room);
+			line.setPosition(QPointF(0, at));
+			at += line.height();
+		}
+		layout->endLayout();
+		return layout;
 	}
 
 	// "HOURS WANTED:" and a box for each option.
@@ -360,7 +443,11 @@ QImage paintSheet(const Form &form, uint32_t seed)
 
 QImage paintPicture(const Form &form, uint32_t seed)
 {
-	const QImage sheet = paintSheet(form, seed);
+	return paintPicture(paintSheet(form, seed));
+}
+
+QImage paintPicture(const QImage &sheet)
+{
 	const QSize size = pictureSize();
 	const QRectF at = sheetInPicture();
 
@@ -397,12 +484,97 @@ QImage paintPicture(const Form &form, uint32_t seed)
 	return picture;
 }
 
-QByteArray png(const QImage &picture)
+namespace {
+
+// The paper's fonts that are on this computer, to ask which characters they have.
+const std::vector<QRawFont> &handFonts()
+{
+	static const std::vector<QRawFont> fonts = [] {
+		std::vector<QRawFont> found;
+		for (const QString &family : kHandFonts)
+			if (QFontDatabase::hasFamily(family)) {
+				QFont font(family);
+				font.setPixelSize(32);
+				const QRawFont raw = QRawFont::fromFont(font);
+				if (raw.isValid())
+					found.push_back(raw);
+			}
+		return found;
+	}();
+	return fonts;
+}
+
+bool hidden(char32_t c)
+{
+	return c < 0x20 || (c >= 0x7F && c <= 0x9F) || c == 0x061C || (c >= 0x200B && c <= 0x200F) ||
+	       (c >= 0x202A && c <= 0x202E) || (c >= 0x2060 && c <= 0x2069) || c == 0xFEFF;
+}
+
+bool pictograph(char32_t c)
+{
+	return c >= 0x1F000 || (c >= 0x2190 && c <= 0x2BFF) || c == 0x00A9 || c == 0x00AE || c == 0x203C || c == 0x2049 ||
+	       c == 0x2122 || c == 0x2139 || c == 0x3030 || c == 0x303D || c == 0x3297 || c == 0x3299;
+}
+
+// What joins or changes the emoji before it: the zero-width joiner and the text and emoji variation selectors.
+bool joiner(char32_t c)
+{
+	return c == 0x200D || c == 0xFE0E || c == 0xFE0F;
+}
+
+bool inked(char32_t c)
+{
+	if (c == U' ')
+		return true;
+	const std::vector<QRawFont> &fonts = handFonts();
+	return std::any_of(fonts.begin(), fonts.end(), [c](const QRawFont &font) { return font.supportsCharacter(c); });
+}
+
+} // namespace
+
+QString writable(const QString &text, int longest)
+{
+	const QList<uint> all = text.toUcs4();
+	QString kept;
+	bool afterEmoji = false;
+	for (qsizetype i = 0; i < all.size(); i++) {
+		const char32_t c = all[i];
+		if (joiner(c)) { // only inside an emoji, which then stays one; a stray one goes
+			const bool after = i + 1 < all.size() && pictograph(all[i + 1]);
+			if (afterEmoji && (c != 0x200D || after))
+				kept += QString::fromUcs4(&c, 1);
+			continue;
+		}
+		const bool space = c == U'\t' || c == U'\n' || c == U'\r';
+		if (!space && (hidden(c) || !inked(c))) {
+			afterEmoji = false;
+			continue;
+		}
+		const char32_t put = space ? U' ' : c;
+		kept += QString::fromUcs4(&put, 1);
+		afterEmoji = pictograph(c) || (afterEmoji && c >= 0x1F3FB && c <= 0x1F3FF);
+	}
+	kept = kept.simplified();
+
+	// Cut between whole characters as a reader sees them.
+	QTextBoundaryFinder graphemes(QTextBoundaryFinder::Grapheme, kept);
+	int count = 0;
+	qsizetype cut = 0;
+	for (qsizetype at = graphemes.toNextBoundary(); at > 0; at = graphemes.toNextBoundary()) {
+		if (++count == longest - 1)
+			cut = at;
+		if (count > longest)
+			return kept.left(cut).trimmed() + QChar(0x2026);
+	}
+	return kept;
+}
+
+QByteArray png(const QImage &picture, bool quick)
 {
 	QByteArray bytes;
 	QBuffer buffer(&bytes);
 	buffer.open(QIODevice::WriteOnly);
-	picture.convertToFormat(QImage::Format_ARGB32).save(&buffer, "PNG");
+	picture.convertToFormat(QImage::Format_ARGB32).save(&buffer, "PNG", quick ? 80 : -1);
 	return bytes;
 }
 

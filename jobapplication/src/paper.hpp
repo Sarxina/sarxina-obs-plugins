@@ -35,7 +35,14 @@ inline constexpr qsizetype kLargestPicture = 5 * 1024 * 1024;
 QImage paintSheet(const Form &form, uint32_t seed);
 // The picture VTube Studio gets: the sheet, out of square, and its shadow.
 QImage paintPicture(const Form &form, uint32_t seed);
-// As a PNG file.
-QByteArray png(const QImage &picture);
+QImage paintPicture(const QImage &sheet); // from a sheet painted already
+// As a PNG file; `quick` packs it less tightly, in about a third of the time, for one written again and again.
+QByteArray png(const QImage &picture, bool quick = false);
+
+// What a chatter wrote, or their name, as it can be written on the paper: the characters that turn text around or hide
+// in it taken out (as plain-text.hpp does), and also every character that none of the paper's fonts has, which would
+// show as an empty box. Emoji, and letters of other scripts that Windows has fonts for, stay. Spaces are tidied, and
+// it is cut to at most `longest` characters (a whole emoji or accented letter counts as one), with "…" where it was.
+QString writable(const QString &text, int longest);
 
 } // namespace sarxina::jobapplication

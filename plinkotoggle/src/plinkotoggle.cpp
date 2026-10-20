@@ -59,6 +59,13 @@ PlinkoToggle::PlinkoToggle()
 	connect(&poll_, &QTimer::timeout, this, &PlinkoToggle::ask);
 	pump_.setInterval(kPumpMs);
 	connect(&pump_, &QTimer::timeout, this, &PlinkoToggle::pump);
+	// A reward made with the settings' button, or the channel's rewards listed: kept, and the settings drawn again
+	// once they are done with what they are doing.
+	drops_.changed = [this] {
+		apply(drops_.settings());
+		save();
+		QTimer::singleShot(0, this, [] { sarxina_obs_plugin_manager_settings_changed(PLUGIN_NAME); });
+	};
 }
 
 void PlinkoToggle::start()
@@ -222,7 +229,7 @@ void PlinkoToggle::chat(const sarxina_chat_message &message)
 	QString who;
 	if (drops_.hear(message, now(), ready(), who))
 		dropFor(who);
-	if (drops_.rewardsChanged()) // a new one to pick from, if the settings are open
+	if (drops_.rewardsChanged() && !drops_.listed()) // a new one to pick from, if the settings are open
 		QTimer::singleShot(0, this, [] { sarxina_obs_plugin_manager_settings_changed(PLUGIN_NAME); });
 }
 

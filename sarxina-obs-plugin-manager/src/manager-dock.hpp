@@ -1,5 +1,5 @@
-// The Sarxina OBS Plugin Manager's dock: a line of state for the Twitch chat (of the account OBS is connected to) and
-// for VTube Studio, and the streamer's plugins. A dropdown holds every Sarxina plugin there is, each with an Install
+// The Sarxina OBS Plugin Manager's dock: a line for the one Twitch connection (with Connect, or the code to enter at
+// twitch.tv/activate, then the account and its chat) and one for VTube Studio, and the streamer's plugins. A dropdown holds every Sarxina plugin there is, each with an Install
 // button that reads Uninstall once it is installed, and Update when there is a newer version. OBS loads plugins only
 // when it starts, so after a change the plugin's line in the dropdown says to restart OBS, and so does the dock.
 //
@@ -54,6 +54,7 @@ private:
 	};
 
 	void pressVts();
+	void pressTwitch();
 	void showTwitch();
 	void showVts();
 	void addRows();
@@ -64,6 +65,8 @@ private:
 
 	Manager &manager_;
 	QLabel *twitchState_;
+	QPushButton *twitchButton_; // Connect, Open, Disconnect or Reconnect
+	QLabel *chatState_;         // the chat of the account connected, under it
 	QSpinBox *port_;
 	QPushButton *vtsButton_;
 	QLabel *vtsState_;
