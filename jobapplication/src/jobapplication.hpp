@@ -7,7 +7,7 @@
 //     viewer's name (shared/src/chat-trigger.hpp). The command's cooldown is for each chatter. A line brings the paper
 //     up if it is down. The lines are kept until OBS closes; the full name on the form is "Chat".
 //   - The trigger, the reward (picked from the channel's, or made with a button) and the paper's size are set behind
-//     the manager's gear.
+//     the manager's gear, with a button there that clears the application: every line off it, blank again.
 // New lines are gathered for a moment and written together, at most every couple of seconds: the paper is painted
 // again (form.hpp, paper.hpp) and VTube Studio gets it in place of the one up. A redeem of a reward the manager made is
 // marked fulfilled once its line is on the paper on screen.
@@ -62,6 +62,10 @@ public:
 	void getSettings(obs_data_t *settings) const;
 	void update(obs_data_t *settings);
 	void chat(const sarxina_chat_message &message);
+	// The button "Clear the application": every line of experience off the paper, which is blank again with "Chat" as
+	// the name. If the paper is up, the blank one goes up in its place the way new writing does; if it is down, it
+	// comes up blank next time.
+	void clear();
 
 	// The hotkey: the paper comes up, or goes.
 	void toggle(const QString &who);

@@ -11,7 +11,8 @@
 //   6. Chat: what it writes made safe to go on the paper (emoji and other scripts kept, nothing that would show as a
 //      box); !jobapp with a cooldown for each chatter, and redeems; the channel's rewards from Twitch in the settings,
 //      the button that makes one, redeems marked fulfilled; and the whole way: lines gathered and written together,
-//      the new paper up before the old one goes, a line bringing the paper up.
+//      the new paper up before the old one goes, a line bringing the paper up; the button that clears the
+//      application, with the paper up and down.
 //   7. The paper as a Live2D item: its .moc3 read back; how it bends (held at the top, turned about it, curled toward
 //      the camera or back, twisted, never stretched); its texture; its physics and VTube Studio settings; its folder
 //      written into and taken out of an Items folder; and up and down that way with the stand-in for VTube Studio,
@@ -1272,6 +1273,63 @@ bool writing(const QByteArray &)
 	app.chat(down.view());
 	settleApp();
 	tally.expect(prop.shown() && experience->bullets[0].text == "unpaid intern", "a line while it is down brings it up");
+
+	// The button "Clear the application" in the settings, pressed the way the manager presses it.
+	obs_properties_t *form = app.properties();
+	obs_property_t *clear = obs_properties_get(form, "clear");
+	tally.expect(clear && obs_property_get_type(clear) == OBS_PROPERTY_BUTTON &&
+			     QString::fromUtf8(obs_property_description(clear)) == "Clear the application",
+		     "a button in the settings: Clear the application");
+	Form blank = jobApplication();
+	blank.set("name", QStringLiteral("Chat"));
+	const QImage blankSheet = paintSheet(blank, kPaperSeed);
+	const auto isBlank = [&app, experience, &blankSheet] {
+		return experience->bullets.empty() && app.form().field("name")->value == "Chat" &&
+		       paintSheet(app.form(), kPaperSeed) == blankSheet;
+	};
+	const auto press = [clear] { return clear && obs_property_button_clicked(clear, nullptr); };
+
+	int before = app.painted();
+	vts.sent.clear();
+	const bool redraw = press();
+	tally.expect(!redraw && app.entries() == 0 && app.writingSoon(),
+		     "pressed while the paper is up: every line off, written like new writing, the settings not drawn again");
+	settleApp();
+	tally.expect(app.painted() == before + 1 && isBlank(), "the paper blank again, with Chat as the name");
+	tally.expect(prop.shown() && vts.items.size() == 1 &&
+			     joined(vts.sent) == "ItemList, ItemLoad, ItemPin, ItemPin, ItemMove, ItemUnload",
+		     "the blank one up in place of the old one, the paper up the whole time: " + joined(vts.sent).toStdString());
+
+	before = app.painted();
+	vts.sent.clear();
+	press();
+	settleApp();
+	tally.expect(app.painted() == before && vts.sent.isEmpty(), "pressed when it is blank already: nothing written again");
+
+	const Said barista{"!jobapp barista", "", "cy", "cy"};
+	app.chat(barista.view());
+	press();
+	settleApp();
+	tally.expect(app.painted() == before + 1 && isBlank(), "a line and the button at once: gathered into one blank paper");
+
+	const Said walker{"!jobapp dog walker", "", "dee", "dee"};
+	app.chat(walker.view());
+	settleApp();
+	tally.expect(experience->bullets.size() == 1 && experience->bullets[0].text == "dog walker",
+		     "a line after it: the only one on the paper");
+
+	app.toggle(QStringLiteral("the self-test"));
+	settleApp();
+	before = app.painted();
+	vts.sent.clear();
+	press();
+	settleApp();
+	tally.expect(!prop.shown() && app.entries() == 0 && app.painted() == before && vts.sent.isEmpty(),
+		     "pressed while the paper is down: every line off, nothing sent to VTube Studio");
+	app.toggle(QStringLiteral("the self-test"));
+	settleApp();
+	tally.expect(prop.shown() && app.painted() == before + 1 && isBlank(), "and the paper comes up blank next time");
+	obs_properties_destroy(form);
 	return tally.report("writing on the paper", "checks as expected");
 }
 

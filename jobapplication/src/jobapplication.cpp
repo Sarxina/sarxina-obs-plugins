@@ -52,6 +52,13 @@ sarxina_plugin_info info = {
 	[](void *data, const sarxina_chat_message *message) { self(data)->chat(*message); },
 };
 
+// The button in the settings. Nothing in them changes, so the manager need not draw them again.
+bool clearPressed(obs_properties_t *, obs_property_t *, void *data)
+{
+	self(data)->clear();
+	return false;
+}
+
 // On OBS's hotkey thread: over to the UI thread, where everything else happens.
 void hotkeyPressed(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
 {
@@ -178,6 +185,7 @@ obs_properties_t *JobApplication::properties()
 	obs_property_t *size = obs_properties_add_int(properties, "size", obs_module_text("Size"), kLeastSize, kMostSize, 1);
 	obs_property_int_set_suffix(size, " %");
 	obs_property_set_long_description(size, obs_module_text("Size.Help"));
+	obs_properties_add_button2(properties, "clear", obs_module_text("Clear"), clearPressed, this);
 	return properties;
 }
 
@@ -297,6 +305,23 @@ void JobApplication::took(const Heard &heard)
 		return;
 	}
 	writeSoon();
+}
+
+void JobApplication::clear()
+{
+	if (closed_)
+		return;
+	if (entries_.empty()) {
+		blog(LOG_INFO, "[%s] the job application is blank already", PLUGIN_TITLE);
+		return;
+	}
+	const size_t lines = entries_.size();
+	entries_.clear();
+	dirty_ = true;
+	blog(LOG_INFO, "[%s] the job application cleared: %lld line%s of experience taken off", PLUGIN_TITLE,
+	     static_cast<long long>(lines), lines == 1 ? "" : "s");
+	if (enabled_ && prop_.wanted()) // up: written blank like new writing; down: painted blank when it comes up
+		writeSoon();
 }
 
 // Lines that come close together are gathered and written together, and the paper is written at most every couple of

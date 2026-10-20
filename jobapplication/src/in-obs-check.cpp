@@ -1,6 +1,7 @@
 // The part of JobApplication's self-test that needs OBS, the Sarxina OBS Plugin Manager and a running VTube Studio
 // (JOBAPPLICATION_SELFTEST=1). It says whether the manager runs the plugin, its trigger and size, the model VTube Studio
 // has loaded, the ArtMesh the paper would be pinned to, and where VTube Studio's Items folder is (for the Live2D item).
+// It presses "Clear the application" in the settings the way the manager does, which takes off any lines chat wrote.
 //
 // With JOBAPPLICATION_SELFTEST_SHOW=1 it also brings the paper up the way the hotkey does, leaves it up for eight
 // seconds, and takes it down again: the first time, VTube Studio asks the streamer once to allow custom images, and the
@@ -42,6 +43,20 @@ void waitFor(QObject *context, std::function<bool()> done, int ms, std::string w
 		}
 	});
 	timer->start();
+}
+
+// The button in the settings, pressed the way the manager presses it.
+void pressClear(JobApplication &plugin)
+{
+	obs_properties_t *properties = plugin.properties();
+	obs_property_t *clear = obs_properties_get(properties, "clear");
+	const long long before = static_cast<long long>(plugin.entries());
+	const bool redraw = clear && obs_property_button_clicked(clear, nullptr);
+	const bool ok = clear && !redraw && plugin.entries() == 0;
+	test::report(ok, "in OBS: pressed \"%s\" in the settings: %lld line%s before, %lld after: %s",
+		     clear ? obs_property_description(clear) : "(no such button)", before, before == 1 ? "" : "s",
+		     static_cast<long long>(plugin.entries()), ok ? "OK" : "FAILED");
+	obs_properties_destroy(properties);
 }
 
 void showAndHide(JobApplication &plugin)
@@ -89,6 +104,7 @@ void checkInObs(JobApplication &plugin)
 		     trigger.cooldownSeconds, plugin.sizePercent());
 	if (!plugin.managed())
 		return;
+	pressClear(plugin);
 
 	const bool show = qEnvironmentVariableIntValue("JOBAPPLICATION_SELFTEST_SHOW") != 0;
 	JobApplication *at = &plugin;
