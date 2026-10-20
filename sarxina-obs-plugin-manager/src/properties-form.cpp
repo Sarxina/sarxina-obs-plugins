@@ -6,6 +6,7 @@
 #include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -39,6 +40,10 @@ PropertiesForm::~PropertiesForm()
 
 void PropertiesForm::reload()
 {
+	if (clicking_) {
+		reloadAfterClick_ = true;
+		return;
+	}
 	const sarxina_plugin_info &info = *plugin_.info;
 	clear();
 	obs_properties_destroy(properties_);
@@ -81,6 +86,8 @@ void PropertiesForm::build()
 		const char *label = obs_property_description(property);
 		if (obs_property_get_type(property) == OBS_PROPERTY_BOOL)
 			form->addRow(widget);
+		else if (obs_property_get_type(property) == OBS_PROPERTY_BUTTON)
+			form->addRow(QString(), widget); // in line with the fields, its words on it
 		else
 			form->addRow(plain(label, fields_), widget);
 	}
@@ -192,6 +199,11 @@ QWidget *PropertiesForm::field(obs_property_t *property)
 		});
 		return box;
 	}
+	case OBS_PROPERTY_BUTTON: {
+		auto *button = new QPushButton(QString::fromUtf8(obs_property_description(property)), fields_);
+		connect(button, &QPushButton::clicked, this, [this, property] { clicked(property); });
+		return button;
+	}
 	default:
 		return nullptr;
 	}
@@ -205,6 +217,17 @@ void PropertiesForm::changed(obs_property_t *property)
 		info.update(info.data, settings_);
 	if (redraw)
 		build();
+}
+
+// There is no source here, so libobs hands the callback the data the plugin gave the button.
+void PropertiesForm::clicked(obs_property_t *property)
+{
+	clicking_ = true;
+	reloadAfterClick_ = false;
+	const bool redraw = obs_property_button_clicked(property, nullptr);
+	clicking_ = false;
+	if (redraw || reloadAfterClick_)
+		reload();
 }
 
 } // namespace sarxina

@@ -1,14 +1,16 @@
 // The Sarxina OBS Plugin Manager without its dock: the plugins that handed themselves to it, the store that installs
-// and uninstalls plugins (store.hpp), the chat connection and the VTube Studio connection the plugins share, and what
-// it remembers between sessions (in its config.json). A plugin that is installed runs; one uninstalled while OBS runs
-// is switched off at once.
+// and uninstalls plugins (store.hpp), the chat connection, the Twitch connection for channel points and the VTube
+// Studio connection the plugins share, and what it remembers between sessions (in its config.json). A plugin that is
+// installed runs; one uninstalled while OBS runs is switched off at once.
 //
 // The chat is the chat of the Twitch account OBS itself is connected to (Settings > Stream), read without logging in.
+// Channel points need a login, and the manager has its own (twitch-api.hpp): it never reads OBS's tokens.
 #pragma once
 
 #include "chat-router.hpp"
 #include "plugin.hpp"
 #include "store.hpp"
+#include "twitch-api.hpp"
 #include "twitch-chat.hpp"
 #include "vtube-studio.hpp"
 
@@ -32,12 +34,13 @@ public:
 		SelfTest, // reads and writes no config.json
 	};
 	explicit Manager(Use use = Use::Obs, const QString &twitchServer = TwitchChat::kServer,
-			 Store::Setup store = Store::Setup());
+			 Store::Setup store = Store::Setup(), TwitchApi::Setup twitchApi = TwitchApi::Setup());
 
 	// What plugins call (sarxina-obs-plugin-manager.h).
 	bool add(const sarxina_plugin_info *info);
 	void settingsChanged(const char *id);
 	void vtsRequest(const sarxina_vts_request &request);
+	void twitchRequest(const sarxina_twitch_request &request);
 
 	const std::vector<std::unique_ptr<Plugin>> &plugins() const { return plugins_; }
 	Plugin *plugin(const QString &id) const;
@@ -49,13 +52,16 @@ public:
 	// Reads this account's chat, or none if it is empty.
 	void followTwitchAccount(const QString &account);
 
+	// The connection for channel points, which the streamer connects in the dock.
+	TwitchApi &twitchApi() { return twitchApi_; }
+
 	VTubeStudio &vts() { return vts_; }
 	int vtsPort() const { return vtsPort_; }
 	void connectVts(int port); // may make VTube Studio ask the streamer to allow the manager
 	void disconnectVts();
 
-	// OBS has finished loading: fetches the list of plugins, and connects VTube Studio again if it was connected when
-	// OBS last closed.
+	// OBS has finished loading: fetches the list of plugins, checks the Twitch token for channel points, and connects
+	// VTube Studio again if it was connected when OBS last closed.
 	void start();
 	// OBS is closing: the connections close, and nothing more reaches any plugin.
 	void shutDown();
@@ -74,6 +80,7 @@ private:
 	std::vector<std::unique_ptr<Plugin>> plugins_;
 	ChatRouter router_;
 	TwitchChat twitch_;
+	TwitchApi twitchApi_;
 	VTubeStudio vts_;
 	QElapsedTimer clock_;
 	bool closed_ = false;

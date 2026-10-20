@@ -18,10 +18,11 @@ constexpr const char *kLog = "[Sarxina OBS Plugin Manager]";
 
 } // namespace
 
-Manager::Manager(Use use, const QString &twitchServer, Store::Setup store)
+Manager::Manager(Use use, const QString &twitchServer, Store::Setup store, TwitchApi::Setup twitchApi)
 	: use_(use),
 	  store_(std::move(store)),
-	  twitch_(twitchServer)
+	  twitch_(twitchServer),
+	  twitchApi_(std::move(twitchApi))
 {
 	clock_.start();
 	load();
@@ -166,11 +167,29 @@ void Manager::vtsRequest(const sarxina_vts_request &request)
 	vts_.request(QString::fromUtf8(request.type), data, answer);
 }
 
+// ---- Twitch's API ---------------------------------------------------------------------------------------------------
+
+void Manager::twitchRequest(const sarxina_twitch_request &request)
+{
+	if (closed_ || !request.done)
+		return;
+	// The plugin's strings last only for this call: copied here.
+	const auto done = request.done;
+	void *param = request.param;
+	twitchApi_.request(QString::fromUtf8(request.method ? request.method : ""),
+			   QString::fromUtf8(request.path ? request.path : ""), QByteArray(request.body ? request.body : ""),
+			   [this, done, param](int status, const QByteArray &body) {
+				   if (!closed_)
+					   done(param, status, body.constData());
+			   });
+}
+
 // ---- starting, stopping, remembering --------------------------------------------------------------------------------
 
 void Manager::start()
 {
 	store_.start();
+	twitchApi_.start();
 	if (vtsOn_ && !vtsToken_.isEmpty()) // never asks VTube Studio for a new token on its own
 		vts_.connectTo(vtsPort_, vtsToken_, false);
 }
@@ -180,6 +199,7 @@ void Manager::shutDown()
 	closed_ = true;
 	store_.shutDown();
 	twitch_.leave();
+	twitchApi_.shutDown();
 	vts_.disconnect();
 }
 
