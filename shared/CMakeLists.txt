@@ -31,3 +31,9 @@ target_include_directories(sarxina-shared PUBLIC src)
 add_library(sarxina-plinko OBJECT src/physics.hpp src/plinko.cpp src/plinko.hpp src/plinko-painter.cpp src/plinko-painter.hpp)
 sarxina_target_settings(sarxina-plinko)
 target_include_directories(sarxina-plinko PUBLIC src)
+
+# What sets a plugin off from chat, a command or a channel point redeem, with its settings (PlinkoToggle,
+# JobApplication); and chat's text made safe to show.
+add_library(sarxina-chat-trigger OBJECT src/chat-trigger.cpp src/chat-trigger.hpp src/plain-text.cpp src/plain-text.hpp)
+sarxina_target_settings(sarxina-chat-trigger)
+target_include_directories(sarxina-chat-trigger PUBLIC src)

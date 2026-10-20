@@ -1,7 +1,6 @@
 #include "plinkotoggle.hpp"
 
 #include "board-source.hpp"
-#include "plain-text.hpp"
 
 #include <obs-module.h>
 #include <obs.hpp>
@@ -11,8 +10,6 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
-#include <algorithm>
-#include <cstring>
 #include <memory>
 
 namespace sarxina::plinkotoggle {
@@ -30,17 +27,6 @@ QByteArray utf8(const QString &text)
 PlinkoToggle *self(void *data)
 {
 	return static_cast<PlinkoToggle *>(data);
-}
-
-// The settings show the command field or the reward fields, whichever the trigger needs.
-bool triggerPicked(obs_properties_t *properties, obs_property_t *, obs_data_t *settings)
-{
-	const bool reward = std::strcmp(obs_data_get_string(settings, "trigger"), "reward") == 0;
-	obs_property_set_visible(obs_properties_get(properties, "command"), !reward);
-	obs_property_set_visible(obs_properties_get(properties, "reward"), reward);
-	obs_property_set_visible(obs_properties_get(properties, "reward_help"), reward);
-	obs_property_set_visible(obs_properties_get(properties, "reward_name"), reward);
-	return true;
 }
 
 sarxina_plugin_info info = {
@@ -123,84 +109,30 @@ void PlinkoToggle::setEnabled(bool enabled)
 obs_properties_t *PlinkoToggle::properties()
 {
 	obs_properties_t *properties = obs_properties_create();
-	obs_property_t *trigger = obs_properties_add_list(properties, "trigger", obs_module_text("Trigger"),
-							  OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(trigger, obs_module_text("Trigger.Command"), "command");
-	obs_property_list_add_string(trigger, obs_module_text("Trigger.Reward"), "reward");
-	obs_property_set_modified_callback(trigger, triggerPicked);
-
-	obs_properties_add_text(properties, "command", obs_module_text("Command"), OBS_TEXT_DEFAULT);
-
-	// The rewards redeemed in chat since OBS started, and the one picked before, which may not have been.
-	obs_property_t *reward = obs_properties_add_list(properties, "reward", obs_module_text("Reward"),
-							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(reward, obs_module_text("Reward.None"), "");
-	const Settings &now = drops_.settings();
-	const std::vector<Drops::Reward> &seen = drops_.rewards();
-	const bool listed = now.rewardId.empty() || std::any_of(seen.begin(), seen.end(), [&now](const auto &r) {
-				    return r.id == now.rewardId;
-			    });
-	if (!listed)
-		obs_property_list_add_string(reward, utf8(now.rewardLabel).constData(), now.rewardId.c_str());
-	for (const Drops::Reward &r : seen)
-		obs_property_list_add_string(reward, utf8(r.label).constData(), r.id.c_str());
-	obs_properties_add_text(properties, "reward_help", obs_module_text("Reward.Help"), OBS_TEXT_INFO);
-	obs_properties_add_text(properties, "reward_name", obs_module_text("RewardName"), OBS_TEXT_DEFAULT);
-
-	obs_property_t *cooldown =
-		obs_properties_add_int(properties, "cooldown", obs_module_text("Cooldown"), kLeastCooldown, kMostCooldown, 1);
-	obs_property_int_set_suffix(cooldown, " s");
-	obs_property_set_long_description(cooldown, obs_module_text("Cooldown.Help"));
+	addTriggerProperties(properties, drops_, true);
 	return properties;
 }
 
 void PlinkoToggle::getSettings(obs_data_t *settings) const
 {
-	const Settings &now = drops_.settings();
-	obs_data_set_string(settings, "trigger", now.trigger == Settings::Trigger::Reward ? "reward" : "command");
-	obs_data_set_string(settings, "command", ("!" + now.command).c_str());
-	obs_data_set_string(settings, "reward", now.rewardId.c_str());
-	obs_data_set_string(settings, "reward_name", utf8(now.rewardName).constData());
-	obs_data_set_int(settings, "cooldown", now.cooldownSeconds);
+	triggerToSettings(settings, drops_.settings());
 }
 
 void PlinkoToggle::update(obs_data_t *settings)
 {
-	Settings changed = drops_.settings();
-	changed.trigger = std::strcmp(obs_data_get_string(settings, "trigger"), "reward") == 0 ? Settings::Trigger::Reward
-											      : Settings::Trigger::Command;
-
-	// A command that cannot be one keeps the one before, and the field shows what the command is now.
-	const std::string typed = obs_data_get_string(settings, "command");
-	const std::string command = commandName(typed);
-	if (!command.empty())
-		changed.command = command;
-	const bool rewrite = typed != "!" + changed.command;
-
-	const std::string reward = obs_data_get_string(settings, "reward");
-	if (reward != changed.rewardId) {
-		changed.rewardId = reward;
-		changed.rewardLabel.clear();
-		for (const Drops::Reward &r : drops_.rewards())
-			if (r.id == reward)
-				changed.rewardLabel = r.label;
-	}
-	changed.rewardName = plainText(QString::fromUtf8(obs_data_get_string(settings, "reward_name")), kLongestRewardName);
-	changed.cooldownSeconds =
-		std::clamp(static_cast<int>(obs_data_get_int(settings, "cooldown")), kLeastCooldown, kMostCooldown);
-
-	apply(changed);
+	bool rewrite = false;
+	apply(triggerFromSettings(settings, drops_, rewrite));
 	save();
 	if (rewrite) // once the settings are done with this change
 		QTimer::singleShot(0, this, [] { sarxina_obs_plugin_manager_settings_changed(PLUGIN_NAME); });
 }
 
-void PlinkoToggle::trySettings(const Settings &settings)
+void PlinkoToggle::trySettings(const TriggerSettings &settings)
 {
 	apply(settings);
 }
 
-void PlinkoToggle::apply(const Settings &settings)
+void PlinkoToggle::apply(const TriggerSettings &settings)
 {
 	drops_.setSettings(settings);
 	refresh();
@@ -208,27 +140,11 @@ void PlinkoToggle::apply(const Settings &settings)
 
 void PlinkoToggle::load()
 {
-	Settings settings;
+	OBSDataAutoRelease config;
 	BPtr<char> path(obs_module_config_path("config.json"));
-	if (path && os_file_exists(path)) {
-		OBSDataAutoRelease config = obs_data_create_from_json_file_safe(path, "bak");
-		if (config) {
-			obs_data_set_default_string(config, "trigger", "command");
-			obs_data_set_default_string(config, "command", settings.command.c_str());
-			obs_data_set_default_int(config, "cooldown", settings.cooldownSeconds);
-			if (std::strcmp(obs_data_get_string(config, "trigger"), "reward") == 0)
-				settings.trigger = Settings::Trigger::Reward;
-			if (const std::string command = commandName(obs_data_get_string(config, "command")); !command.empty())
-				settings.command = command;
-			settings.rewardId = obs_data_get_string(config, "reward_id");
-			settings.rewardLabel = QString::fromUtf8(obs_data_get_string(config, "reward_label"));
-			settings.rewardName = plainText(QString::fromUtf8(obs_data_get_string(config, "reward_name")),
-							kLongestRewardName);
-			settings.cooldownSeconds = std::clamp(static_cast<int>(obs_data_get_int(config, "cooldown")),
-							      kLeastCooldown, kMostCooldown);
-		}
-	}
-	drops_.setSettings(settings);
+	if (path && os_file_exists(path))
+		config = obs_data_create_from_json_file_safe(path, "bak");
+	drops_.setSettings(loadTrigger(config, drops_.settings()));
 }
 
 void PlinkoToggle::save() const
@@ -238,14 +154,8 @@ void PlinkoToggle::save() const
 	if (!folder || !path)
 		return;
 	os_mkdirs(folder);
-	const Settings &now = drops_.settings();
 	OBSDataAutoRelease config = obs_data_create();
-	obs_data_set_string(config, "trigger", now.trigger == Settings::Trigger::Reward ? "reward" : "command");
-	obs_data_set_string(config, "command", now.command.c_str());
-	obs_data_set_string(config, "reward_id", now.rewardId.c_str());
-	obs_data_set_string(config, "reward_label", utf8(now.rewardLabel).constData());
-	obs_data_set_string(config, "reward_name", utf8(now.rewardName).constData());
-	obs_data_set_int(config, "cooldown", now.cooldownSeconds);
+	saveTrigger(config, drops_.settings());
 	obs_data_save_json_safe(config, path, "tmp", "bak");
 }
 
@@ -287,11 +197,11 @@ void PlinkoToggle::refresh()
 	// The board shows nothing but the toggles and how chat drops a ball. Without the manager, VTube Studio or a model
 	// it is empty; the log says why.
 	Content content;
-	const Settings &now = drops_.settings();
+	const TriggerSettings &now = drops_.settings();
 	if (managed_ && enabled_) {
 		if (model_.state == Model::State::Loaded)
 			content.toggles = model_.toggles;
-		content.label = now.trigger == Settings::Trigger::Command ? QString::fromStdString("!" + now.command)
+		content.label = now.trigger == TriggerSettings::Trigger::Command ? QString::fromStdString("!" + now.command)
 									   : now.rewardName;
 	}
 	showOnBoards(content);

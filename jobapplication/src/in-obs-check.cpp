@@ -1,0 +1,115 @@
+// The part of JobApplication's self-test that needs OBS, the Sarxina OBS Plugin Manager and a running VTube Studio
+// (JOBAPPLICATION_SELFTEST=1). It says whether the manager runs the plugin, its trigger and size, the model VTube Studio
+// has loaded, and the ArtMesh the paper would be pinned to.
+//
+// With JOBAPPLICATION_SELFTEST_SHOW=1 it also brings the paper up the way the hotkey does, leaves it up for eight
+// seconds, and takes it down again: the first time, VTube Studio asks the streamer once to allow custom images, and the
+// check waits up to a minute for that.
+#include "jobapplication.hpp"
+#include "self-test.hpp"
+
+#include <QJsonArray>
+#include <QTimer>
+
+#include <functional>
+#include <memory>
+#include <string>
+
+using namespace sarxina;
+using namespace sarxina::jobapplication;
+
+namespace {
+
+constexpr int kUpMs = 75000;   // the permission box, then the load
+constexpr int kStayMs = 8000;  // up this long
+constexpr int kDownMs = 10000;
+
+// Waits for `done`, looking every 100 ms, then goes on; or says it waited too long.
+void waitFor(QObject *context, std::function<bool()> done, int ms, std::string what, std::function<void(bool)> then)
+{
+	auto *timer = new QTimer(context);
+	auto waited = std::make_shared<int>(0);
+	timer->setInterval(100);
+	QObject::connect(timer, &QTimer::timeout, context, [timer, waited, done, ms, what, then] {
+		*waited += 100;
+		if (done() || *waited >= ms) {
+			timer->deleteLater();
+			const bool ok = done();
+			if (!ok)
+				test::report(false, "%s: waited %d s", what.c_str(), ms / 1000);
+			then(ok);
+		}
+	});
+	timer->start();
+}
+
+void showAndHide(JobApplication &plugin)
+{
+	PaperProp &prop = plugin.prop();
+	plugin.toggle(QStringLiteral("the self-test"));
+	waitFor(
+		&plugin, [&prop] { return prop.shown() && !prop.busy(); }, kUpMs, "the paper coming up",
+		[&plugin, &prop](bool up) {
+			if (!up) {
+				test::report(false, "in OBS: FAILED (the log above says why)");
+				return;
+			}
+			test::report(!prop.pinnedTo().isEmpty(), "in OBS: the paper is up as item %s, pinned to %s: %s",
+				     prop.instance().toUtf8().constData(),
+				     prop.pinnedTo().isEmpty() ? "nothing" : prop.pinnedTo().toUtf8().constData(),
+				     prop.pinnedTo().isEmpty() ? "NOT PINNED" : "OK");
+			QTimer::singleShot(kStayMs, &plugin, [&plugin, &prop] {
+				plugin.toggle(QStringLiteral("the self-test"));
+				waitFor(
+					&plugin, [&prop] { return !prop.shown() && !prop.busy(); }, kDownMs,
+					"the paper going down", [](bool down) {
+						test::report(down, "in OBS: the paper went down again: %s", down ? "OK" : "FAILED");
+						test::report(down, "in OBS: %s", down ? "passed" : "FAILED");
+					});
+			});
+		});
+}
+
+} // namespace
+
+void checkInObs(JobApplication &plugin)
+{
+	const TriggerSettings &trigger = plugin.settings();
+	test::report(true, "in OBS: %s; %s; chat: %s, cooldown %d s; size %d %%",
+		     plugin.managed() ? "run by the Sarxina OBS Plugin Manager" : "the manager is NOT installed",
+		     plugin.enabled() ? "on" : "off",
+		     trigger.trigger == TriggerSettings::Trigger::Command ? ("!" + trigger.command).c_str()
+									    : "a channel point reward",
+		     trigger.cooldownSeconds, plugin.sizePercent());
+	if (!plugin.managed())
+		return;
+
+	const bool show = qEnvironmentVariableIntValue("JOBAPPLICATION_SELFTEST_SHOW") != 0;
+	JobApplication *at = &plugin;
+	sendToVts(QStringLiteral("CurrentModelRequest"), {}, [at, show](bool ok, const QJsonObject &model) {
+		if (!ok || !model.value(QStringLiteral("modelLoaded")).toBool()) {
+			test::report(false, "in OBS: VTube Studio: %s",
+				     ok ? "no model loaded"
+					: model.value(QStringLiteral("message")).toString().toUtf8().constData());
+			return;
+		}
+		const QJsonObject position = model.value(QStringLiteral("modelPosition")).toObject();
+		test::report(true, "in OBS: VTube Studio has %s loaded, at %.2f, %.2f, size %.1f, turned %.1f degrees",
+			     model.value(QStringLiteral("modelName")).toString().toUtf8().constData(),
+			     position.value(QStringLiteral("positionX")).toDouble(),
+			     position.value(QStringLiteral("positionY")).toDouble(),
+			     position.value(QStringLiteral("size")).toDouble(),
+			     position.value(QStringLiteral("rotation")).toDouble());
+		sendToVts(QStringLiteral("ArtMeshListRequest"), {}, [at, show](bool listed, const QJsonObject &meshes) {
+			QStringList names;
+			for (const QJsonValue &name : meshes.value(QStringLiteral("artMeshNames")).toArray())
+				names << name.toString();
+			const QString pin = pinTarget(names);
+			test::report(listed && !pin.isEmpty(), "in OBS: %lld ArtMeshes; the paper pins to %s",
+				     static_cast<long long>(names.size()),
+				     pin.isEmpty() ? "none of them" : pin.toUtf8().constData());
+			if (show)
+				showAndHide(*at);
+		});
+	});
+}

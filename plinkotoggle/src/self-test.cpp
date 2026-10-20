@@ -10,7 +10,7 @@
 // Given a folder, it also paints boards into PNG files there. Inside OBS, in-obs-check.cpp goes on from here.
 #include "self-test.hpp"
 
-#include "drops.hpp"
+#include "chat-trigger.hpp"
 #include "plain-text.hpp"
 #include "toggle-board.hpp"
 #include "vts-toggles.hpp"
@@ -188,13 +188,13 @@ bool chat()
 {
 	Tally tally;
 	QString who;
-	const auto hear = [&who](Drops &drops, const Message &message, double ms, bool ready = true) {
+	const auto hear = [&who](ChatTrigger &drops, const Message &message, double ms, bool ready = true) {
 		const sarxina_chat_message m = message.view();
 		return drops.hear(m, ms, ready, who);
 	};
 
 	// The command
-	Drops drops;
+	ChatTrigger drops{"plinko"};
 	tally.expect(drops.settings().command == "plinko" && drops.settings().cooldownSeconds == 10, "!plinko and 10 s");
 	tally.expect(!hear(drops, {"!plinko"}, 0, false), "not while no board can take a ball");
 	tally.expect(hear(drops, {"!plinko"}, 10) && who == "Viewer", "!plinko");
@@ -202,7 +202,7 @@ bool chat()
 	tally.expect(hear(drops, {"!PLINKO go go"}, 10010), "in capitals with words after it, once cooled down");
 	for (const char *other : {"!plinkos", "plinko", " !plinko", "!plink", "! plinko", "!plinko\t"})
 		tally.expect(!hear(drops, {other}, 1e6), std::string("not the command: \"") + other + "\"");
-	Settings settings;
+	TriggerSettings settings;
 	settings.command = "drop_it";
 	settings.cooldownSeconds = 1;
 	drops.setSettings(settings);
@@ -211,10 +211,10 @@ bool chat()
 		     "a redeem in command mode is chat like any other");
 
 	// The redeem
-	settings.trigger = Settings::Trigger::Reward;
+	settings.trigger = TriggerSettings::Trigger::Reward;
 	settings.rewardId = "the-reward";
 	settings.cooldownSeconds = 10;
-	Drops redeems;
+	ChatTrigger redeems{"plinko"};
 	redeems.setSettings(settings);
 	tally.expect(!hear(redeems, {"!plinko"}, 0) && !hear(redeems, {"hi", "other-reward"}, 0),
 		     "the command and other rewards drop nothing");
@@ -228,12 +228,12 @@ bool chat()
 	for (int i = 0; i < 60; i++)
 		hear(redeems, {"spam", "the-reward"}, 11000);
 	tally.expect(redeems.waiting() == kMostWaiting, "at most 50 waiting");
-	settings.trigger = Settings::Trigger::Command;
+	settings.trigger = TriggerSettings::Trigger::Command;
 	redeems.setSettings(settings);
 	tally.expect(redeems.waiting() == 0, "none waiting once the trigger changes");
 
 	// The rewards offered in the settings
-	Drops seen;
+	ChatTrigger seen{"plinko"};
 	const Message first{"drop it please", "reward-a", "Sarxina"};
 	seen.hear(first.view(), 0, true, who);
 	tally.expect(seen.rewardsChanged() && seen.rewards().size() == 1 && seen.rewards()[0].id == "reward-a" &&

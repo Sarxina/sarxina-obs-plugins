@@ -3,7 +3,7 @@
 #include <QChar>
 #include <QList>
 
-namespace sarxina::plinkotoggle {
+namespace sarxina {
 
 namespace {
 
@@ -38,4 +38,4 @@ QString plainText(const QString &text, int longest)
 	return cut.trimmed() + QChar(0x2026);
 }
 
-} // namespace sarxina::plinkotoggle
+} // namespace sarxina

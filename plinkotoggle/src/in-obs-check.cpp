@@ -174,7 +174,7 @@ public:
 
 private:
 	PlinkoToggle &plugin_;
-	Settings original_;
+	TriggerSettings original_;
 	Toggle target_;
 	uint32_t seed_ = 0;
 	bool startedOn_ = false;
@@ -223,8 +223,8 @@ void Check::run(const QString &name)
 		landed_++;
 	};
 
-	Settings command = original_;
-	command.trigger = Settings::Trigger::Command;
+	TriggerSettings command = original_;
+	command.trigger = TriggerSettings::Trigger::Command;
 	command.cooldownSeconds = kTestCooldown;
 	plugin_.trySettings(command);
 	const std::string typed = "!" + command.command;
@@ -245,8 +245,8 @@ void Check::run(const QString &name)
 		land(1, !startedOn_, "the command", [this] {
 			putBack("the command", [this] {
 				// 3
-				Settings reward = original_;
-				reward.trigger = Settings::Trigger::Reward;
+				TriggerSettings reward = original_;
+				reward.trigger = TriggerSettings::Trigger::Reward;
 				reward.rewardId = kTestReward;
 				reward.cooldownSeconds = kTestCooldown;
 				plugin_.trySettings(reward);
