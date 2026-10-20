@@ -23,7 +23,7 @@ namespace sarxina {
 
 namespace {
 
-constexpr const char *kLog = "[Sarxina OBS Plugin Manager] Twitch channel points:";
+constexpr const char *kLog = "[Sarxina OBS Plugin Manager] Twitch:";
 constexpr int kHour = 3600; // seconds between checks of the token, as Twitch wants
 
 QString text(const char *key)

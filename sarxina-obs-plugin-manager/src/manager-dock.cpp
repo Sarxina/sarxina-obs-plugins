@@ -60,24 +60,19 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	auto *grid = new QGridLayout(connections);
 	grid->setColumnStretch(1, 1);
 
-	// Twitch: no settings of its own, it follows the account OBS is connected to.
+	// Twitch: the one connection every plugin's chat and channel points go through, which the streamer makes here.
 	twitchState_ = plain(QString(), connections);
+	twitchState_->setObjectName(QStringLiteral("twitch-state"));
+	twitchButton_ = new QPushButton(connections);
+	twitchButton_->setObjectName(QStringLiteral("twitch-button"));
+	chatState_ = plain(QString(), connections);
+	chatState_->setObjectName(QStringLiteral("twitch-chat"));
+	auto *twitch = new QHBoxLayout; // the words take the whole line when there is no button
+	twitch->addWidget(twitchState_, 1);
+	twitch->addWidget(twitchButton_);
 	grid->addWidget(plain(text("Twitch"), connections), 0, 0);
-	grid->addWidget(twitchState_, 0, 1, 1, 2);
-
-	// Channel points: the manager's own Twitch connection, which the streamer makes here.
-	pointsState_ = plain(QString(), connections);
-	pointsState_->setObjectName(QStringLiteral("points-state"));
-	pointsButton_ = new QPushButton(connections);
-	pointsButton_->setObjectName(QStringLiteral("points-button"));
-	pointsNote_ = plain(QString(), connections);
-	pointsNote_->setObjectName(QStringLiteral("points-note"));
-	auto *points = new QHBoxLayout; // the words take the whole line when there is no button
-	points->addWidget(pointsState_, 1);
-	points->addWidget(pointsButton_);
-	grid->addWidget(plain(text("ChannelPoints"), connections), 1, 0);
-	grid->addLayout(points, 1, 1, 1, 2);
-	grid->addWidget(pointsNote_, 2, 1, 1, 2);
+	grid->addLayout(twitch, 0, 1, 1, 2);
+	grid->addWidget(chatState_, 1, 1, 1, 2);
 
 	port_ = new QSpinBox(connections);
 	port_->setRange(1, 65535);
@@ -86,20 +81,18 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 	vtsState_ = plain(QString(), connections);
 	QLabel *vts = plain(text("VTubeStudio"), connections);
 	vts->setBuddy(port_);
-	grid->addWidget(vts, 3, 0);
-	grid->addWidget(port_, 3, 1);
-	grid->addWidget(vtsButton_, 3, 2);
-	grid->addWidget(vtsState_, 4, 1, 1, 2);
+	grid->addWidget(vts, 2, 0);
+	grid->addWidget(port_, 2, 1);
+	grid->addWidget(vtsButton_, 2, 2);
+	grid->addWidget(vtsState_, 3, 1, 1, 2);
 	layout->addWidget(connections);
 
+	connect(twitchButton_, &QPushButton::clicked, this, &ManagerDock::pressTwitch);
+	connect(&manager.twitchApi(), &TwitchApi::stateChanged, this, &ManagerDock::showTwitch);
 	connect(&manager.twitch(), &TwitchChat::stateChanged, this, &ManagerDock::showTwitch);
-	connect(&manager.twitch(), &TwitchChat::stateChanged, this, &ManagerDock::showPoints);
-	connect(pointsButton_, &QPushButton::clicked, this, &ManagerDock::pressPoints);
-	connect(&manager.twitchApi(), &TwitchApi::stateChanged, this, &ManagerDock::showPoints);
 	connect(vtsButton_, &QPushButton::clicked, this, &ManagerDock::pressVts);
 	connect(&manager.vts(), &VTubeStudio::stateChanged, this, &ManagerDock::showVts);
 	showTwitch();
-	showPoints();
 	showVts();
 
 	// Plugins: the dropdown with every one there is, then the list of those OBS runs
@@ -144,26 +137,7 @@ ManagerDock::ManagerDock(Manager &manager, QWidget *parent) : QWidget(parent), m
 
 // ---- connections ----------------------------------------------------------------------------------------------------
 
-void ManagerDock::showTwitch()
-{
-	const QString channel = manager_.twitch().channel();
-	switch (manager_.twitch().state()) {
-	case TwitchChat::State::Off: // the OBS profile has no Twitch account
-		twitchState_->setText(text("Twitch.NoAccount"));
-		break;
-	case TwitchChat::State::Connecting:
-		twitchState_->setText(text("Twitch.Connecting").arg(channel));
-		break;
-	case TwitchChat::State::Reading:
-		twitchState_->setText(text("Twitch.Reading").arg(channel));
-		break;
-	case TwitchChat::State::Retrying:
-		twitchState_->setText(text("Twitch.Retrying"));
-		break;
-	}
-}
-
-void ManagerDock::pressPoints()
+void ManagerDock::pressTwitch()
 {
 	TwitchApi &api = manager_.twitchApi();
 	switch (api.state()) {
@@ -175,54 +149,59 @@ void ManagerDock::pressPoints()
 	}
 }
 
-void ManagerDock::showPoints()
+void ManagerDock::showTwitch()
 {
 	const TwitchApi &api = manager_.twitchApi();
 	const auto why = [&api] {
 		switch (api.why()) {
-		case TwitchApi::Why::Unreachable: return text("Points.Unreachable");
-		case TwitchApi::Why::Expired: return text("Points.Expired");
-		case TwitchApi::Why::Denied: return text("Points.Denied");
-		case TwitchApi::Why::Refused: return text("Points.Refused");
-		case TwitchApi::Why::Scope: return text("Points.Scope");
-		case TwitchApi::Why::SignedOut: return text("Points.SignedOut");
+		case TwitchApi::Why::Unreachable: return text("Twitch.Unreachable");
+		case TwitchApi::Why::Expired: return text("Twitch.Expired");
+		case TwitchApi::Why::Denied: return text("Twitch.Denied");
+		case TwitchApi::Why::Refused: return text("Twitch.Refused");
+		case TwitchApi::Why::Scope: return text("Twitch.Scope");
+		case TwitchApi::Why::SignedOut: return text("Twitch.SignedOut");
 		case TwitchApi::Why::Nothing: break;
 		}
 		return text("Off");
 	};
 	const char *button = nullptr;
 	switch (api.state()) {
-	case TwitchApi::State::NoApp: pointsState_->setText(text("Points.NoApp")); break;
+	case TwitchApi::State::NoApp: twitchState_->setText(text("Twitch.NoApp")); break;
 	case TwitchApi::State::Off:
-		pointsState_->setText(why());
+		twitchState_->setText(why());
 		button = "Connect";
 		break;
-	case TwitchApi::State::Connecting: pointsState_->setText(text("Points.Connecting")); break;
+	case TwitchApi::State::Connecting: twitchState_->setText(text("Twitch.Connecting")); break;
 	case TwitchApi::State::Waiting:
-		pointsState_->setText(text("Points.Code").arg(api.userCode()));
+		twitchState_->setText(text("Twitch.Code").arg(api.userCode()));
 		button = "Open";
 		break;
 	case TwitchApi::State::Ready:
-		pointsState_->setText(text("Points.Connected").arg(api.login()));
+		twitchState_->setText(text("Twitch.Connected").arg(api.login()));
 		button = "Disconnect";
 		break;
 	case TwitchApi::State::Reconnect:
-		pointsState_->setText(text("Points.Reconnect").arg(why()));
+		twitchState_->setText(text("Twitch.Reconnect").arg(why()));
 		button = "Reconnect";
 		break;
 	}
 	// The code can be copied.
-	pointsState_->setTextInteractionFlags(api.state() == TwitchApi::State::Waiting ? Qt::TextSelectableByMouse
-										  : Qt::NoTextInteraction);
-	pointsButton_->setText(button ? text(button) : QString());
-	pointsButton_->setVisible(button != nullptr);
+	twitchState_->setTextInteractionFlags(api.state() == TwitchApi::State::Waiting ? Qt::TextSelectableByMouse
+										   : Qt::NoTextInteraction);
+	twitchButton_->setText(button ? text(button) : QString());
+	twitchButton_->setVisible(button != nullptr);
 
-	// Plugins hear the chat of the account OBS streams as, and change the rewards of this one.
-	const QString channel =
-		manager_.twitch().state() != TwitchChat::State::Off ? manager_.twitch().channel() : QString();
-	const bool other = api.state() == TwitchApi::State::Ready && !channel.isEmpty() && channel != api.login().toLower();
-	pointsNote_->setText(other ? text("Points.OtherAccount").arg(channel) : QString());
-	pointsNote_->setVisible(other);
+	// Under it, the chat of the account connected.
+	const QString channel = manager_.twitch().channel();
+	QString chat;
+	switch (manager_.twitch().state()) {
+	case TwitchChat::State::Off: break;
+	case TwitchChat::State::Connecting: chat = text("Chat.Connecting").arg(channel); break;
+	case TwitchChat::State::Reading: chat = text("Chat.Reading").arg(channel); break;
+	case TwitchChat::State::Retrying: chat = text("Chat.Retrying"); break;
+	}
+	chatState_->setText(chat);
+	chatState_->setVisible(!chat.isEmpty());
 }
 
 void ManagerDock::pressVts()

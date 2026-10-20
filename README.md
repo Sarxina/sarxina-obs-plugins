@@ -4,7 +4,7 @@ Silly (and some useful) OBS plugins for VTubers and streamers. Grab the **Sarxin
 
 ## Sarxina OBS Plugin Manager
 
-One dock where you pick your plugins and change their settings behind each one's gear. It also hooks them up to VTube Studio and to your Twitch chat (from the account OBS is logged into, Settings > Stream > Connect Account). For channel point redeems, hit **Connect** next to **Channel points** in the dock and enter the code it shows at twitch.tv/activate. Not to be confused with OBS's own Plugin Manager under Tools; this one is just for Sarxina plugins.
+One dock where you pick your plugins and change their settings behind each one's gear. It also hooks them up to VTube Studio and to Twitch: hit **Connect** next to **Twitch** in the dock and enter the code it shows at twitch.tv/activate, once. That one connection is all of Twitch for every plugin: your chat's commands, channel point redeems, and the rewards in their settings. Not to be confused with OBS's own Plugin Manager under Tools; this one is just for Sarxina plugins.
 
 **Install it:** close OBS, download the manager's zip from [the latest release](../../releases/latest) and extract it into your OBS folder (usually `C:\Program Files\obs-studio`). Open OBS, tick **Sarxina OBS Plugin Manager** under **Docks**, hit **Install** on the plugins you want and restart OBS. **Uninstall** takes one back out.
 

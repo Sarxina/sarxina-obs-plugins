@@ -2,9 +2,11 @@ find_package(CURL REQUIRED)
 find_package(ZLIB REQUIRED) # zlib.dll comes with OBS too, to unpack the plugins' zips
 find_package(Qt6 REQUIRED COMPONENTS Network) # for the self-test's stand-in servers; OBS ships Qt6Network.dll
 
-# The Client ID of the manager's app on dev.twitch.tv (Client Type: Public), for its channel point connection. A public
-# app has no secret, so the id is all there is. Left empty, the dock says that this build cannot connect channel points.
-set(SARXINA_TWITCH_CLIENT_ID "" CACHE STRING "Client ID of the Sarxina OBS Plugin Manager's app on dev.twitch.tv")
+# The Client ID of the manager's app on dev.twitch.tv ("Sarxina OBS Plugin Manager", Client Type: Public), for its
+# channel point connection. A public app has no secret, so the id is all there is, and it ships in the manager. Set
+# empty, the dock says that this build cannot connect channel points.
+set(SARXINA_TWITCH_CLIENT_ID "hvngbutjgwxcc49esrjkgb85o4osys" CACHE STRING
+    "Client ID of the Sarxina OBS Plugin Manager's app on dev.twitch.tv")
 if(NOT SARXINA_TWITCH_CLIENT_ID MATCHES "^[A-Za-z0-9]*$")
   message(FATAL_ERROR "SARXINA_TWITCH_CLIENT_ID has to be the Client ID from dev.twitch.tv: only letters and digits")
 endif()

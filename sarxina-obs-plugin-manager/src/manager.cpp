@@ -31,6 +31,7 @@ Manager::Manager(Use use, const QString &twitchServer, Store::Setup store, Twitc
 			setEnabled(*plugin, on);
 	});
 	connect(&twitch_, &TwitchChat::message, this, &Manager::route);
+	connect(&twitchApi_, &TwitchApi::stateChanged, this, &Manager::followConnection);
 	connect(&vts_, &VTubeStudio::tokenChanged, this, [this](const QString &token) {
 		vtsToken_ = token;
 		save();
@@ -108,14 +109,9 @@ void Manager::followTwitchAccount(const QString &account)
 		twitch_.join(account);
 }
 
-QString twitchAccount(config_t *profile)
+void Manager::followConnection()
 {
-	if (!profile)
-		return {};
-	const char *type = config_get_string(profile, "Auth", "Type");
-	const char *name = config_get_string(profile, "Twitch", "Name");
-	const QString account = QString::fromUtf8(name ? name : "");
-	return type && std::strcmp(type, "Twitch") == 0 && TwitchChat::validChannel(account) ? account : QString();
+	followTwitchAccount(twitchApi_.state() == TwitchApi::State::Ready ? twitchApi_.login() : QString());
 }
 
 void Manager::route(const ChatMessage &message)
@@ -190,6 +186,7 @@ void Manager::start()
 {
 	store_.start();
 	twitchApi_.start();
+	followConnection();
 	if (vtsOn_ && !vtsToken_.isEmpty()) // never asks VTube Studio for a new token on its own
 		vts_.connectTo(vtsPort_, vtsToken_, false);
 }

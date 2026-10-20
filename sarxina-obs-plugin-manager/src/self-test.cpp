@@ -2,8 +2,7 @@
 // and VTube Studio are played by small stand-in websocket servers on this computer, and GitHub and Twitch's API by
 // stand-in http servers, and plugins are installed into a folder of its own that it deletes afterwards.
 //
-//   1. Lines from Twitch become the right chat messages, and the Twitch account OBS is connected to is read from its
-//      profile (only the name).
+//   1. Lines from Twitch become the right chat messages.
 //   2. The checks drop what they should and let the rest through.
 //   3. Commands reach the plugin that registered them, and only when they may.
 //   4. The whole way: a stand-in Twitch sends chat over a real websocket, and a plugin's handler gets the command.
@@ -15,19 +14,19 @@
 //   8. Installing, updating and uninstalling, laid out the way a portable OBS and ProgramData want them, with
 //      downloads that go wrong installing nothing, and what is left for the next start finished then.
 //   9. The dock: Install, Uninstall and Update, what each line says, and the list of plugins OBS runs.
-//  10. Twitch's API for channel points, against a stand-in for Twitch that answers as Twitch's documentation shows:
+//  10. The one Twitch connection, against a stand-in for Twitch that answers as Twitch's documentation shows:
 //      connecting with the device code flow, plugins' requests with the broadcaster, the Client-Id and the token added,
 //      Twitch's answers passed on as they came, a token refreshed once when it ran out, and every way it can go wrong.
-//  11. The dock's line for channel points in each of its states.
+//  11. The dock's line for Twitch in each of its states, and the chat of the account connected under it.
 //  12. Buttons in a plugin's settings.
-// Given a folder, it also paints the dock into dock.png there (and into dock-code.png while the code for channel points
-// waits to be entered), its dropdown into dropdown.png, and what a plugin's gear shows into settings.png. With
+// Given a folder, it also paints the dock into dock.png there (and into dock-code.png while the code for Twitch waits
+// to be entered), its dropdown into dropdown.png, and what a plugin's gear shows into settings.png. With
 // SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_ONLINE=1 it also downloads a released zip from GitHub itself.
 //
 // Inside OBS (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST=1) checkInObs also lists the plugins that registered through OBS
-// and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would; and when channel
-// points are connected, asks Twitch for the channel's rewards the same way. pressInObs presses one button in the real
-// dock (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS, see there).
+// and, once VTube Studio is connected, sends it one request that only reads, the way a plugin would; and when Twitch is
+// connected, asks Twitch for the channel's rewards the same way. pressInObs presses one button in the real dock
+// (SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS, see there).
 #include "self-test.hpp"
 
 #include "catalog.hpp"
@@ -82,6 +81,9 @@ QString text(const char *key)
 {
 	return QString::fromUtf8(obs_module_text(key));
 }
+
+// For a manager whose chat is not under test: nothing listens there, so it never reaches the real Twitch.
+const QString kNoChat = QStringLiteral("ws://127.0.0.1:1");
 
 // Runs Qt's event loop until `done` or until `ms` have passed.
 template<typename Done> bool waitFor(Done done, int ms = 5000)
@@ -421,46 +423,6 @@ bool parsing()
 	return tally.report("Twitch", "lines read as expected");
 }
 
-// ---- 1b. the Twitch account OBS is connected to ---------------------------------------------------------------------
-
-// What a profile's basic.ini looks like with a connected Twitch account. The tokens beside the name are never read.
-const char *const kConnectedProfile = "[General]\nName=Streaming\n"
-				      "[Auth]\nType=Twitch\n"
-				      "[Twitch]\nName=sarxina\nUUID=x\nToken=not-for-us\nRefreshToken=not-for-us\n";
-
-QString accountIn(const char *profile)
-{
-	config_t *config = nullptr;
-	if (config_open_string(&config, profile) != CONFIG_SUCCESS)
-		return QStringLiteral("(unreadable)");
-	const QString account = twitchAccount(config);
-	config_close(config);
-	return account;
-}
-
-bool account()
-{
-	Tally tally;
-	tally.expect(accountIn(kConnectedProfile) == "sarxina", "the name of the connected account");
-	tally.expect(accountIn("[Auth]\nType=YouTube - RTMPS\n[Twitch]\nName=sarxina\n").isEmpty(),
-		     "nothing when OBS is connected to another service");
-	tally.expect(accountIn("[Twitch]\nName=sarxina\n").isEmpty(), "nothing when the account was disconnected");
-	tally.expect(accountIn("[Auth]\nType=Twitch\n[Twitch]\nName=two words\n").isEmpty(), "nothing for a bad name");
-	tally.expect(accountIn("[General]\nName=Untitled\n").isEmpty() && twitchAccount(nullptr).isEmpty(),
-		     "nothing in a profile without one");
-
-	// Given a copy of a real profile, says which account it has: only the name.
-	const QByteArray copy = qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PROFILE");
-	config_t *config = nullptr;
-	if (!copy.isEmpty() && config_open(&config, copy.constData(), CONFIG_OPEN_EXISTING) == CONFIG_SUCCESS) {
-		const QString name = twitchAccount(config);
-		config_close(config);
-		test::report(true, "Twitch account in %s: %s", copy.constData(),
-			     name.isEmpty() ? "none" : name.toUtf8().constData());
-	}
-	return tally.report("Twitch account", "profiles read as expected");
-}
-
 // ---- 2. the checks --------------------------------------------------------------------------------------------------
 
 bool checks()
@@ -632,7 +594,7 @@ bool twitchConnection()
 	handshake(" after the drop");
 
 	manager.followTwitchAccount("");
-	tally.expect(manager.twitch().state() == TwitchChat::State::Off, "off when OBS has no Twitch account");
+	tally.expect(manager.twitch().state() == TwitchChat::State::Off, "off when no Twitch account is connected");
 	return tally.report("Twitch connection", "steps as expected");
 }
 
@@ -1335,7 +1297,7 @@ bool theDock()
 	const sarxina_plugin_info one = testPlugin(first, "first", "Test plugin");
 	sarxina_plugin_info two = testPlugin(second, "second", "Another test plugin");
 	two.get_properties = nullptr;
-	Manager manager(Manager::Use::SelfTest, TwitchChat::kServer, setupFor(github, layout, &loaded, {}));
+	Manager manager(Manager::Use::SelfTest, kNoChat, setupFor(github, layout, &loaded, {}));
 	ManagerDock dock(manager); // made first, as in OBS, where plugins register once the dock is there
 	dock.setAttribute(Qt::WA_DontShowOnScreen);
 	dock.show();
@@ -1681,7 +1643,7 @@ bool twitchApi()
 
 	// A build without a Twitch app id
 	{
-		Manager manager(Manager::Use::SelfTest, TwitchChat::kServer, Store::Setup(),
+		Manager manager(Manager::Use::SelfTest, kNoChat, Store::Setup(),
 				twitchSetup(twitch, "", remembered, &opened));
 		tally.expect(state(manager) == TwitchApi::State::NoApp, "no app id: it says it cannot connect");
 		TwitchAnswer &answer = ask(manager, "GET", "/channel_points/custom_rewards");
@@ -1691,7 +1653,7 @@ bool twitchApi()
 		tally.expect(state(manager) == TwitchApi::State::NoApp && !twitch.next(r, 200), "no app id: Connect does nothing");
 	}
 
-	auto manager = std::make_unique<Manager>(Manager::Use::SelfTest, TwitchChat::kServer, Store::Setup(),
+	auto manager = std::make_unique<Manager>(Manager::Use::SelfTest, kNoChat, Store::Setup(),
 						 twitchSetup(twitch, kClientId, remembered, &opened));
 	TwitchApi &api = manager->twitchApi();
 	tally.expect(api.state() == TwitchApi::State::Off, "not connected at first");
@@ -1873,9 +1835,9 @@ bool twitchApi()
 		     "a token without the channel point scopes: needs reconnecting");
 	TwitchAnswer &noScope = ask(*manager, "POST", "/channel_points/custom_rewards", newReward);
 	tally.expect(answered(noScope) && noScope.status == 0 &&
-			     noScope.message() == "Reconnect Twitch in the Sarxina OBS Plugin Manager to allow channel points." &&
+			     noScope.message() == "Reconnect Twitch in the Sarxina OBS Plugin Manager." &&
 			     !twitch.next(r, 200),
-		     "and a request says to reconnect to allow channel points");
+		     "and a request says to reconnect Twitch in the manager");
 
 	// The streamer says no, the code runs out, Twitch cannot be reached
 	const auto endsWith = [&](const QByteArray &answer, TwitchApi::Why why) {
@@ -1902,7 +1864,7 @@ bool twitchApi()
 	// The next time OBS starts: connected at once, and the token checked
 	tally.expect(connectAll(*manager, kValidate) && api.state() == TwitchApi::State::Ready, "connected again");
 	manager.reset();
-	manager = std::make_unique<Manager>(Manager::Use::SelfTest, TwitchChat::kServer, Store::Setup(),
+	manager = std::make_unique<Manager>(Manager::Use::SelfTest, kNoChat, Store::Setup(),
 					    twitchSetup(twitch, kClientId, remembered, &opened));
 	tally.expect(manager->twitchApi().state() == TwitchApi::State::Ready && manager->twitchApi().login() == "sarxina",
 		     "the next start: connected as sarxina from twitch.json");
@@ -1921,7 +1883,7 @@ bool twitchApi()
 	tally.expect(late.calls == 0 && afterClose.calls == 0, "OBS closing: no answer reaches a plugin after that");
 
 	// Disconnect: Twitch told to forget the token, and twitch.json too
-	manager = std::make_unique<Manager>(Manager::Use::SelfTest, TwitchChat::kServer, Store::Setup(),
+	manager = std::make_unique<Manager>(Manager::Use::SelfTest, kNoChat, Store::Setup(),
 					    twitchSetup(twitch, kClientId, remembered, &opened));
 	manager->twitchApi().disconnectTwitch();
 	tally.expect(twitch.next(r) && r.path == "/oauth2/revoke" && r.field("client_id") == kClientId &&
@@ -1934,7 +1896,7 @@ bool twitchApi()
 
 	// Twitch wants the token checked every hour. Here a second is 1 ms, and an hour 3.6 seconds.
 	{
-		Manager hourly(Manager::Use::SelfTest, TwitchChat::kServer, Store::Setup(),
+		Manager hourly(Manager::Use::SelfTest, kNoChat, Store::Setup(),
 			       twitchSetup(twitch, kClientId, folder.filePath("hourly.json"), &opened, 1));
 		connectAll(hourly, kValidate);
 		tally.expect(hourly.twitchApi().state() == TwitchApi::State::Ready && twitch.next(r, 8000) &&
@@ -1952,9 +1914,9 @@ bool twitchApi()
 	return tally.report("Twitch's API", "steps as expected");
 }
 
-// ---- 11. the dock's line for channel points -------------------------------------------------------------------------
+// ---- 11. the dock's line for Twitch ---------------------------------------------------------------------------------
 
-bool channelPointsDock()
+bool twitchDock()
 {
 	Tally tally;
 	StandInTwitch twitch;
@@ -1962,27 +1924,27 @@ bool channelPointsDock()
 	std::vector<QUrl> opened;
 	StandInTwitch::Request r;
 	const auto says = [](ManagerDock &dock) {
-		QLabel *label = dock.findChild<QLabel *>("points-state");
+		QLabel *label = dock.findChild<QLabel *>("twitch-state");
 		return label ? label->text() : QStringLiteral("(none)");
 	};
 	const auto button = [](ManagerDock &dock) {
-		QPushButton *button = dock.findChild<QPushButton *>("points-button");
+		QPushButton *button = dock.findChild<QPushButton *>("twitch-button");
 		return !button ? QStringLiteral("(none)") : button->isHidden() ? QStringLiteral("(hidden)") : button->text();
 	};
 	const auto press = [](ManagerDock &dock) {
-		if (QPushButton *button = dock.findChild<QPushButton *>("points-button"))
+		if (QPushButton *button = dock.findChild<QPushButton *>("twitch-button"))
 			button->click();
 	};
 	const auto note = [](ManagerDock &dock) {
-		QLabel *label = dock.findChild<QLabel *>("points-note");
+		QLabel *label = dock.findChild<QLabel *>("twitch-chat");
 		return !label || label->isHidden() ? QString() : label->text();
 	};
 
 	{
 		Manager manager(Manager::Use::SelfTest, chat.url(), Store::Setup(), TwitchApi::Setup());
 		ManagerDock dock(manager);
-		tally.expect(says(dock) == text("Points.NoApp") && button(dock) == "(hidden)",
-			     "a build without a Twitch app id: says so, no button");
+		tally.expect(says(dock) == text("Twitch.NoApp") && button(dock) == "(hidden)" && note(dock).isEmpty(),
+			     "a build without a Twitch app id: says so, no button, no chat");
 	}
 
 	Manager manager(Manager::Use::SelfTest, chat.url(), Store::Setup(), twitchSetup(twitch, kClientId, {}, &opened));
@@ -1993,11 +1955,11 @@ bool channelPointsDock()
 	tally.expect(says(dock) == text("Off") && button(dock) == text("Connect"), "not connected: Connect");
 
 	press(dock);
-	tally.expect(says(dock) == text("Points.Connecting") && button(dock) == "(hidden)", "Connect pressed: connecting");
+	tally.expect(says(dock) == text("Twitch.Connecting") && button(dock) == "(hidden)", "Connect pressed: connecting");
 	twitch.next(r);
 	twitch.reply(200, kDevice);
 	waitFor([&] { return api.state() == TwitchApi::State::Waiting; });
-	QLabel *state = dock.findChild<QLabel *>("points-state");
+	QLabel *state = dock.findChild<QLabel *>("twitch-state");
 	tally.expect(says(dock) == "Go to twitch.tv/activate and enter ABCDEFGH" && button(dock) == text("Open") && state &&
 			     (state->textInteractionFlags() & Qt::TextSelectableByMouse),
 		     "the code to enter, which can be copied, and Open");
@@ -2008,17 +1970,18 @@ bool channelPointsDock()
 	twitch.next(r);
 	twitch.reply(200, kValidate);
 	waitFor([&] { return api.state() == TwitchApi::State::Ready; });
-	tally.expect(says(dock) == "Connected as sarxina" && button(dock) == text("Disconnect") && note(dock).isEmpty(),
+	tally.expect(says(dock) == "Connected as sarxina" && button(dock) == text("Disconnect"),
 		     "Connected as sarxina, and Disconnect");
 
-	manager.followTwitchAccount("otheraccount");
-	tally.expect(note(dock) == "That's not the account OBS streams as (otheraccount).",
-		     "OBS streaming as another account: said in one line");
-	manager.followTwitchAccount("");
-	tally.expect(note(dock).isEmpty(), "OBS with no Twitch account: nothing said");
-	manager.followTwitchAccount("Sarxina");
-	tally.expect(note(dock).isEmpty(), "the same account, in other capitals: nothing said");
-	manager.followTwitchAccount("");
+	// The chat of the account connected, with nothing more to do: no OBS account, no restart.
+	QByteArray cap, nick, join;
+	tally.expect(chat.next(cap) && chat.next(nick) && chat.next(join) && join == "JOIN #sarxina" &&
+			     manager.twitch().channel() == "sarxina",
+		     "connected: reads the chat of the account connected");
+	tally.expect(note(dock) == "Connecting to #sarxina's chat...", "and says so under it");
+	chat.send(":" + nick.mid(5) + "!x@x JOIN #sarxina");
+	waitFor([&] { return manager.twitch().state() == TwitchChat::State::Reading; });
+	tally.expect(note(dock) == "Reading #sarxina's chat", "Reading #sarxina's chat, once Twitch says it joined");
 
 	TwitchAnswer answer;
 	manager.twitchRequest({"GET", "/channel_points/custom_rewards", nullptr, twitchAnswered, &answer});
@@ -2027,8 +1990,9 @@ bool channelPointsDock()
 	twitch.next(r);
 	twitch.reply(400, kBadRefresh);
 	waitFor([&] { return api.state() == TwitchApi::State::Reconnect; });
-	tally.expect(says(dock) == "Needs reconnecting: Twitch signed it out." && button(dock) == text("Reconnect"),
-		     "signed out: Needs reconnecting, and Reconnect");
+	tally.expect(says(dock) == "Needs reconnecting: Twitch signed it out." && button(dock) == text("Reconnect") &&
+			     manager.twitch().state() == TwitchChat::State::Off && note(dock).isEmpty(),
+		     "signed out: Needs reconnecting, and Reconnect, and chat stops with it");
 
 	press(dock);
 	twitch.next(r);
@@ -2048,13 +2012,13 @@ bool channelPointsDock()
 	twitch.next(r);
 	twitch.reply(400, kDenied);
 	waitFor([&] { return api.state() == TwitchApi::State::Off; });
-	tally.expect(says(dock) == text("Points.Denied") && button(dock) == text("Connect"), "not allowed on Twitch: Connect");
+	tally.expect(says(dock) == text("Twitch.Denied") && button(dock) == text("Connect"), "not allowed on Twitch: Connect");
 
 	press(dock);
 	twitch.next(r);
 	twitch.drop();
 	waitFor([&] { return api.why() == TwitchApi::Why::Unreachable; });
-	tally.expect(says(dock) == text("Points.Unreachable") && button(dock) == text("Connect"),
+	tally.expect(says(dock) == text("Twitch.Unreachable") && button(dock) == text("Connect"),
 		     "Twitch cannot be reached: Connect");
 
 	press(dock);
@@ -2066,10 +2030,12 @@ bool channelPointsDock()
 	twitch.reply(200, kValidate);
 	waitFor([&] { return api.state() == TwitchApi::State::Ready; });
 	press(dock);
-	tally.expect(twitch.next(r) && r.path == "/oauth2/revoke" && says(dock) == text("Off") && button(dock) == text("Connect"),
-		     "Disconnect: not connected, and Connect");
+	tally.expect(twitch.next(r) && r.path == "/oauth2/revoke" && says(dock) == text("Off") &&
+			     button(dock) == text("Connect") && manager.twitch().state() == TwitchChat::State::Off &&
+			     note(dock).isEmpty(),
+		     "Disconnect: not connected, Connect, and no chat");
 	twitch.reply(200, {});
-	return tally.report("channel points in the dock", "steps as expected");
+	return tally.report("Twitch in the dock", "steps as expected");
 }
 
 // ---- 12. buttons in a plugin's settings -----------------------------------------------------------------------------
@@ -2224,13 +2190,7 @@ void picture(const char *folder)
 		if (title->property("class").toString() == "indicator-expand" && title->text() == "Test plugin")
 			title->setChecked(false); // its description, unfolded
 
-	manager.followTwitchAccount("sarxina");
-	QByteArray cap, nick, join;
-	twitch.next(cap), twitch.next(nick), twitch.next(join);
-	twitch.send(":" + nick.mid(5) + "!x@x JOIN #sarxina");
-	waitFor([&manager] { return manager.twitch().state() == TwitchChat::State::Reading; });
-
-	// Channel points: the code to enter, then connected
+	// Twitch: the code to enter, then connected, and the chat of the account connected
 	StandInTwitch::Request request;
 	manager.twitchApi().connectTwitch();
 	points.next(request);
@@ -2244,6 +2204,10 @@ void picture(const char *folder)
 	points.next(request);
 	points.reply(200, kValidate);
 	waitFor([&manager] { return manager.twitchApi().state() == TwitchApi::State::Ready; });
+	QByteArray cap, nick, join;
+	twitch.next(cap), twitch.next(nick), twitch.next(join);
+	twitch.send(":" + nick.mid(5) + "!x@x JOIN #sarxina");
+	waitFor([&manager] { return manager.twitch().state() == TwitchChat::State::Reading; });
 
 	const QString file = QDir(QString::fromUtf8(folder)).filePath(QStringLiteral("dock.png"));
 	test::report(dock.grab().save(file, "PNG"), "a picture of the dock in %s", file.toUtf8().constData());
@@ -2325,7 +2289,6 @@ bool online()
 bool runSelfTest(const char *picturesFolder)
 {
 	bool passed = parsing();
-	passed &= account();
 	passed &= checks();
 	passed &= routing();
 	passed &= twitchConnection();
@@ -2335,7 +2298,7 @@ bool runSelfTest(const char *picturesFolder)
 	passed &= installing();
 	passed &= theDock();
 	passed &= twitchApi();
-	passed &= channelPointsDock();
+	passed &= twitchDock();
 	passed &= settingsForm();
 	passed &= online();
 	picture(picturesFolder);
@@ -2352,10 +2315,10 @@ void checkInObs(Manager &manager)
 		names += (names.empty() ? "" : ", ") + std::string(plugin->info->name) + (plugin->enabled ? " (on)" : " (off)");
 	test::report(!names.empty(), "registered through OBS: %s", names.empty() ? "nothing" : names.c_str());
 
-	// Channel points, once connected: the channel's rewards, asked through OBS the way a plugin asks. Only reads.
+	// Once Twitch is connected: the channel's rewards, asked through OBS the way a plugin asks. Only reads.
 	const TwitchApi &api = manager.twitchApi();
 	if (api.state() != TwitchApi::State::Ready) {
-		test::report(true, "Twitch channel points: %s",
+		test::report(true, "Twitch: %s",
 			     api.state() == TwitchApi::State::NoApp ? "this build has no Twitch app id" : "not connected");
 	} else {
 		static const sarxina_twitch_request rewards{
@@ -2401,13 +2364,86 @@ void checkInObs(Manager &manager)
 	});
 }
 
+// Inside OBS, with SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS=Connect:twitch: presses Connect next to Twitch in the dock
+// the way a click does (unless it is connected already), says in the log what the dock's Twitch line says each time it
+// changes, the code to enter included, and once it is connected, which rewards each plugin's settings offer. Only
+// reads from Twitch: no reward is made.
+static void connectInObs(ManagerDock &dock, Manager &manager)
+{
+	const auto label = [&dock](const char *name) {
+		QLabel *found = dock.findChild<QLabel *>(name);
+		return found && !found->isHidden() ? found->text() : QString();
+	};
+	QPushButton *connectButton = dock.findChild<QPushButton *>("twitch-button");
+	const TwitchApi::State at = manager.twitchApi().state();
+	if (connectButton && (at == TwitchApi::State::Off || at == TwitchApi::State::Reconnect)) {
+		test::report(true, "in OBS: pressing %s next to Twitch", connectButton->text().toUtf8().constData());
+		connectButton->click();
+	}
+	// Each plugin's reward dropdown, as its settings offer it.
+	const auto rewards = [&manager](bool say) {
+		for (const auto &plugin : manager.plugins()) {
+			if (!plugin->enabled || !plugin->info->get_properties)
+				continue;
+			obs_properties_t *properties = plugin->info->get_properties(plugin->info->data);
+			obs_property_t *reward = properties ? obs_properties_get(properties, "reward") : nullptr;
+			if (reward && say) {
+				QStringList names;
+				const size_t count = obs_property_list_item_count(reward);
+				for (size_t i = 0; i < count; i++)
+					names << QString::fromUtf8(obs_property_list_item_name(reward, i));
+				obs_property_t *help = obs_properties_get(properties, "reward_help");
+				test::report(count > 1, "in OBS, %s's reward dropdown: %d lines: %s (under it: %s)",
+					     plugin->info->name, static_cast<int>(count), names.join(" | ").toUtf8().constData(),
+					     help ? obs_property_description(help) : "nothing");
+			}
+			obs_properties_destroy(properties);
+		}
+	};
+	auto *timer = new QTimer(&dock);
+	auto last = std::make_shared<QString>();
+	auto ready = std::make_shared<int>(0); // ticks since it was connected
+	QObject::connect(timer, &QTimer::timeout, &dock, [=, &manager] {
+		const QString now = label("twitch-state") + " | " + label("twitch-chat");
+		if (now != *last) {
+			*last = now;
+			test::report(true, "in OBS, the dock's Twitch line: %s", now.toUtf8().constData());
+		}
+		const TwitchApi::State state = manager.twitchApi().state();
+		if (state == TwitchApi::State::Off || state == TwitchApi::State::NoApp || state == TwitchApi::State::Reconnect) {
+			test::report(false, "in OBS: Twitch did not connect");
+			timer->stop();
+			timer->deleteLater();
+			return;
+		}
+		if (state != TwitchApi::State::Ready)
+			return;
+		const int tick = ++*ready;
+		if (tick == 1) {
+			test::report(true, "in OBS: Twitch connected as %s", manager.twitchApi().login().toUtf8().constData());
+			rewards(false); // asks Twitch for the rewards
+		} else if (tick == 16) {
+			rewards(true); // four seconds later, what the dropdowns offer
+		} else if (tick == 40) {
+			timer->stop();
+			timer->deleteLater();
+		}
+	});
+	timer->start(250);
+}
+
 // Inside OBS, with SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PRESS=<button>:<plugin> ("Install:slinglive",
 // "Uninstall:slinglive", "Update:plinkolive"), or "-" to press nothing: once the list is there, says in the log what
 // the dock shows for every plugin, presses that button in the dock the way a click does, and once it has settled says
 // again what the dock shows. With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES, it paints the dock and the dropdown.
+// "Connect:twitch" connects Twitch instead (connectInObs).
 void pressInObs(ManagerDock &dock, Manager &manager, const QString &pressing, const QString &pictures)
 {
 	const QString which = pressing.section(':', 0, 0), id = pressing.section(':', 1);
+	if (which == "Connect" && id == "twitch") {
+		connectInObs(dock, manager);
+		return;
+	}
 	const auto describe = [&dock, &manager](const char *when) {
 		for (QAction *action : dropdown(dock) ? dropdown(dock)->actions() : QList<QAction *>()) {
 			auto *widget = qobject_cast<QWidgetAction *>(action);

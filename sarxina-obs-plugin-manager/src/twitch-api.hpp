@@ -1,6 +1,7 @@
-// The manager's own Twitch connection, for channel points: plugins reach Twitch's API (Helix) through it as the
-// broadcaster (sarxina_obs_plugin_manager_twitch_request). Chat needs none of it: chat is read without logging in
-// (twitch-chat.hpp), and OBS's own Twitch tokens are never read.
+// The manager's one Twitch connection, for everything plugins do with Twitch: the chat read is the chat of the account
+// connected here (twitch-chat.hpp reads it the way Twitch lets anyone read a channel's chat, so it needs no scope of
+// its own), and plugins reach Twitch's API (Helix) through it as the broadcaster
+// (sarxina_obs_plugin_manager_twitch_request). OBS's own Twitch account and tokens are never read.
 //
 // The streamer connects it in the dock with Twitch's device code flow, made for apps without a web page of their own:
 // the manager asks Twitch for a code, the streamer enters it at twitch.tv/activate and allows the manager to read and
