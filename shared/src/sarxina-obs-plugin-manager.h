@@ -163,8 +163,9 @@ static inline bool sarxina_obs_plugin_manager_vts_request(const struct sarxina_v
 
 /* A request to Twitch's Helix API (https://api.twitch.tv/helix) as the broadcaster, over the manager's own Twitch
  * connection, which the streamer connects in the manager's dock and which may read and manage channel point rewards
- * (channel:read:redemptions, channel:manage:redemptions). `method` is "GET", "POST", "PATCH" or "DELETE". `path`
- * starts after /helix and may have a query: "/channel_points/custom_rewards?only_manageable_rewards=true". The manager
+ * (channel:read:redemptions, channel:manage:redemptions) and list who is in chat (moderator:read:chatters). `method`
+ * is "GET", "POST", "PATCH" or "DELETE". `path` starts after /helix and may have a query:
+ * "/channel_points/custom_rewards?only_manageable_rewards=true". The manager
  * adds broadcaster_id=<the connected broadcaster> to the query itself, and the Client-Id and the token. `body` is
  * JSON, or NULL for none.
  *

@@ -1,0 +1,15 @@
+# RPG Maker MZ's engine and the art it draws with, copied from the install by get-engine-files.ps1. RPG Maker's own
+# files and the Time Fantasy DLC are not ours to publish.
+/index.html
+/css/
+/effects/
+/fonts/
+/icon/
+/img/
+/audio/
+/js/libs/
+/js/main.js
+/js/rmmz_*.js
+
+# What the game and the editor write while they run
+/save/

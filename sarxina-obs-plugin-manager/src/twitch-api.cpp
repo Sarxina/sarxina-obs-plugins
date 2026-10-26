@@ -144,7 +144,8 @@ const char *name(TwitchApi::Why why)
 } // namespace
 
 const QStringList TwitchApi::kScopes = {QStringLiteral("channel:read:redemptions"),
-					QStringLiteral("channel:manage:redemptions")};
+					QStringLiteral("channel:manage:redemptions"),
+					QStringLiteral("moderator:read:chatters")};
 
 TwitchApi::Setup TwitchApi::Setup::forObs()
 {

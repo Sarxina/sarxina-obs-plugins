@@ -24,5 +24,5 @@ sarxina_add_obs_module(
     src/in-obs-check.cpp
     src/plugin-main.cpp
     src/test-route.cpp
-  LIBRARIES sarxina-chat-trigger
+  LIBRARIES sarxina-chat-trigger sarxina-test-route
 )

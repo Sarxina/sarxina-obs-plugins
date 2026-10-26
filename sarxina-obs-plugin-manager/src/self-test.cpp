@@ -1483,19 +1483,19 @@ const QByteArray kDenied = R"({"status":400,"message":"access_denied"})";
 const QByteArray kExpired = R"({"status":400,"message":"invalid device code"})";
 const QByteArray kToken = R"({"access_token":"rfx2uswqe8l4g1mkagrvg5tv0ks3","expires_in":14124,)"
 			  R"("refresh_token":"5b93chm6hdve3mycz05zfzatkfdenfspp1h1ar2xxdalen01",)"
-			  R"("scope":["channel:manage:redemptions","channel:read:redemptions"],"token_type":"bearer"})";
+			  R"("scope":["channel:manage:redemptions","channel:read:redemptions","moderator:read:chatters"],"token_type":"bearer"})";
 const QByteArray kValidate = R"({"client_id":"selftest0client0id0abcdefghij0","login":"sarxina",)"
-			     R"("scopes":["channel:manage:redemptions","channel:read:redemptions"],"user_id":"141981764",)"
+			     R"("scopes":["channel:manage:redemptions","channel:read:redemptions","moderator:read:chatters"],"user_id":"141981764",)"
 			     R"("expires_in":14124})";
 const QByteArray kValidateOtherScopes = R"({"client_id":"selftest0client0id0abcdefghij0","login":"sarxina",)"
 					R"("scopes":["channel:read:subscriptions"],"user_id":"141981764","expires_in":5520838})";
 const QByteArray kUnauthorized = R"({"error":"Unauthorized","status":401,"message":"Invalid OAuth token"})";
 const QByteArray kRefreshed = R"({"access_token":"1ssjqsqfy6bads1ws7m03gras79zfr","expires_in":15583,)"
 			      R"("refresh_token":"eyJfMzUtNDU0OC4MWYwLTQ5MDY5ODY4NGNlMSJ9%asdfasdf=",)"
-			      R"("scope":["channel:manage:redemptions","channel:read:redemptions"],"token_type":"bearer"})";
+			      R"("scope":["channel:manage:redemptions","channel:read:redemptions","moderator:read:chatters"],"token_type":"bearer"})";
 const QByteArray kRefreshedAgain = R"({"access_token":"2gbdx6oar67tqtcmt49t3wpcgycthx","expires_in":14400,)"
 				   R"("refresh_token":"8tv8hqqo1ctvbbqepm0fmb1a1kb6b5xfrm6ma7y35ntcgxa2ce",)"
-				   R"("scope":["channel:manage:redemptions","channel:read:redemptions"],"token_type":"bearer"})";
+				   R"("scope":["channel:manage:redemptions","channel:read:redemptions","moderator:read:chatters"],"token_type":"bearer"})";
 const QByteArray kBadRefresh = R"({"error":"Bad Request","status":400,"message":"Invalid refresh token"})";
 const QByteArray kRewards =
 	R"({"data":[{"broadcaster_name":"sarxina","broadcaster_login":"sarxina","broadcaster_id":"141981764",)"
@@ -1546,7 +1546,7 @@ const QByteArray kFulfilled =
 	R"("id":"17fa2df1-ad76-4804-bfa5-a40ef63efe63","user_login":"viewer","user_id":"274637212","user_name":"Viewer",)"
 	R"("user_input":"","status":"FULFILLED","redeemed_at":"2020-07-01T18:37:32Z",)"
 	R"("reward":{"id":"92af127c-7326-4483-a52b-b0da0be61c01","title":"game analysis","prompt":"","cost":50000}}]})";
-const QByteArray kScopes = "channel:read:redemptions channel:manage:redemptions";
+const QByteArray kScopes = "channel:read:redemptions channel:manage:redemptions moderator:read:chatters";
 
 // What a plugin's `done` heard.
 struct TwitchAnswer {
@@ -2002,7 +2002,7 @@ bool twitchDock()
 	twitch.next(r);
 	twitch.reply(200, kValidateOtherScopes);
 	waitFor([&] { return api.state() == TwitchApi::State::Reconnect; });
-	tally.expect(says(dock) == "Needs reconnecting: it isn't allowed to change channel points." &&
+	tally.expect(says(dock) == "Needs reconnecting: it isn't allowed everything the plugins need." &&
 			     button(dock) == text("Reconnect"),
 		     "a scope missing: Needs reconnecting, and Reconnect");
 

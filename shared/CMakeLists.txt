@@ -37,3 +37,9 @@ target_include_directories(sarxina-plinko PUBLIC src)
 add_library(sarxina-chat-trigger OBJECT src/chat-trigger.cpp src/chat-trigger.hpp src/plain-text.cpp src/plain-text.hpp)
 sarxina_target_settings(sarxina-chat-trigger)
 target_include_directories(sarxina-chat-trigger PUBLIC src)
+
+# Ways into a plugin without Twitch, for demos and tests: its own requests in obs-websocket, and chat made up from them
+# (JobApplication, ChatVillage).
+add_library(sarxina-test-route OBJECT src/test-route.cpp src/test-route.hpp)
+sarxina_target_settings(sarxina-test-route)
+target_include_directories(sarxina-test-route PUBLIC src)

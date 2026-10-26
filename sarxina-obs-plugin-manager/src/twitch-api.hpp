@@ -5,7 +5,8 @@
 //
 // The streamer connects it in the dock with Twitch's device code flow, made for apps without a web page of their own:
 // the manager asks Twitch for a code, the streamer enters it at twitch.tv/activate and allows the manager to read and
-// manage channel point rewards (the scopes channel:read:redemptions and channel:manage:redemptions), and meanwhile
+// manage channel point rewards (the scopes channel:read:redemptions and channel:manage:redemptions) and to see who is
+// in chat (moderator:read:chatters), and meanwhile
 // the manager asks Twitch every few seconds whether that has happened. The app is a public one, so it has no secret:
 // only its id from dev.twitch.tv (SARXINA_TWITCH_CLIENT_ID, compiled in). A build without one cannot connect.
 //

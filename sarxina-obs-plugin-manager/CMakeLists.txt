@@ -14,7 +14,7 @@ endif()
 sarxina_add_obs_module(
   sarxina-obs-plugin-manager
   TITLE "Sarxina OBS Plugin Manager"
-  VERSION 1.1.0
+  VERSION 1.2.0
   DESCRIPTION "Sarxina OBS Plugin Manager dock for OBS Studio"
   SOURCES
     src/catalog.cpp

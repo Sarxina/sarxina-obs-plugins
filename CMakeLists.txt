@@ -16,6 +16,7 @@ add_subdirectory(slinglive)
 add_subdirectory(plinkolive)
 add_subdirectory(plinkotoggle)
 add_subdirectory(jobapplication)
+add_subdirectory(chatvillage)
 add_subdirectory(sarxina-obs-plugin-manager)
 add_subdirectory(sarxina-parametric-eq)
 add_subdirectory(sarxina-noise-gate)
@@ -30,6 +31,8 @@ sarxina_add_plugins_index(
   slinglive
   plinkolive
   plinkotoggle
+  jobapplication
+  chatvillage
   sarxina-parametric-eq
   sarxina-noise-gate
   sarxina-hard-limiter
