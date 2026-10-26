@@ -8,8 +8,8 @@ Needs the game's engine and art (game\get-engine-files.ps1) and a build (BUILDIN
 chatsaga-town.exe. While OBS runs ChatSaga, the town is at the same address already, and this isn't needed.
 #>
 $ErrorActionPreference = "Stop"
-$repository = Split-Path $PSScriptRoot -Parent
-$program = Join-Path $repository "build_x64\chatsaga\RelWithDebInfo\chatsaga-town.exe"
+$repository = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$program = Join-Path $repository "build_x64\plugins\chatsaga\RelWithDebInfo\chatsaga-town.exe"
 $game = Join-Path $PSScriptRoot "game"
 
 if (-not (Test-Path $program)) { throw "Build first (BUILDING.md): $program isn't there." }

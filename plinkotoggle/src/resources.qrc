@@ -1,5 +1,0 @@
-<RCC>
-    <qresource prefix="/plinkotoggle">
-        <file alias="head.png">../../shared/src/resources/head.png</file>
-    </qresource>
-</RCC>

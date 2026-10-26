@@ -12,13 +12,13 @@ include(ObsPlugin)
 # The code the plugins share, then one folder per plugin (the Sarxina OBS Plugin Manager is one too). To add a
 # plugin, add its folder here.
 add_subdirectory(shared)
-add_subdirectory(slinglive)
-add_subdirectory(plinkolive)
-add_subdirectory(plinkotoggle)
-add_subdirectory(jobapplication)
-add_subdirectory(chatsaga)
+add_subdirectory(plugins/slinglive)
+add_subdirectory(plugins/plinkolive)
+add_subdirectory(plugins/plinkotoggle)
+add_subdirectory(plugins/jobapplication)
+add_subdirectory(plugins/chatsaga)
 add_subdirectory(sarxina-obs-plugin-manager)
-add_subdirectory(voicegoodifier)
+add_subdirectory(plugins/voicegoodifier)
 
 # The smallest plugin the Sarxina OBS Plugin Manager can run, for anyone making their own. Never released.
 add_subdirectory(examples/example-plugin)
