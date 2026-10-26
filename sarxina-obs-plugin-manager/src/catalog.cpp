@@ -11,8 +11,6 @@ namespace sarxina {
 
 namespace {
 
-constexpr const char *kManagerId = "sarxina-obs-plugin-manager";
-
 // Plain text for a label: no control characters, and not too long.
 bool plainText(const QString &text, qsizetype longest)
 {
@@ -93,9 +91,70 @@ bool newer(const QString &a, const QString &b)
 	return false;
 }
 
-bool readIndex(const QByteArray &json, const Source &source, std::vector<Available> &list, QStringList &problems)
+namespace {
+
+// One entry of the list as it is written, unchecked.
+Available readEntry(const QJsonObject &entry)
+{
+	Available plugin;
+	plugin.id = entry.value(QStringLiteral("id")).toString();
+	plugin.name = entry.value(QStringLiteral("name")).toString();
+	plugin.description = entry.value(QStringLiteral("description")).toString();
+	plugin.version = entry.value(QStringLiteral("version")).toString();
+	plugin.url = entry.value(QStringLiteral("url")).toString();
+	plugin.sha256 = entry.value(QStringLiteral("sha256")).toString().toLatin1();
+	return plugin;
+}
+
+// What is wrong with a release's version, zip or SHA-256, in a few words; empty when nothing is.
+QString releaseProblem(const Available &release, const Source &source)
+{
+	static const QRegularExpression hex(QStringLiteral("^[0-9a-f]{64}$"));
+	int parts[3];
+	if (!readVersion(release.version, parts))
+		return QStringLiteral("its version");
+	if (!release.url.startsWith(source.downloads) || !safeRest(release.url.mid(source.downloads.size()), source.local))
+		return QStringLiteral("its zip is not on Sarxina's releases");
+	if (!hex.match(QString::fromLatin1(release.sha256)).hasMatch())
+		return QStringLiteral("its SHA-256");
+	return {};
+}
+
+// What is wrong with a plugin on the list, in a few words; empty when nothing is.
+QString pluginProblem(const Available &plugin, const Source &source, const QSet<QString> &seen)
+{
+	if (!validId(plugin.id) || plugin.id == QLatin1String(kManagerId))
+		return QStringLiteral("its id");
+	if (seen.contains(plugin.id))
+		return QStringLiteral("it is listed twice");
+	if (!plainText(plugin.name, 64) || !plainText(plugin.description, 500))
+		return QStringLiteral("its name or description");
+	return releaseProblem(plugin, source);
+}
+
+// The manager's own release, under "manager", if it is there and right.
+std::optional<Available> readManager(const QJsonObject &index, const Source &source, QStringList &problems)
+{
+	const QJsonValue value = index.value(QStringLiteral("manager"));
+	if (value.isUndefined())
+		return std::nullopt;
+	Available manager = readEntry(value.toObject());
+	manager.id = QString::fromLatin1(kManagerId);
+	manager.name = QStringLiteral("Sarxina OBS Plugin Manager");
+	if (const QString wrong = releaseProblem(manager, source); !wrong.isEmpty()) {
+		problems << QStringLiteral("the manager's own release left out: %1").arg(wrong);
+		return std::nullopt;
+	}
+	return manager;
+}
+
+} // namespace
+
+bool readIndex(const QByteArray &json, const Source &source, std::vector<Available> &list,
+	       std::optional<Available> &manager, QStringList &problems)
 {
 	list.clear();
+	manager.reset();
 	QJsonParseError error{};
 	const QJsonDocument document = QJsonDocument::fromJson(json, &error);
 	const QJsonValue plugins = document.object().value(QStringLiteral("plugins"));
@@ -104,40 +163,18 @@ bool readIndex(const QByteArray &json, const Source &source, std::vector<Availab
 		return false;
 	}
 
-	static const QRegularExpression hex(QStringLiteral("^[0-9a-f]{64}$"));
 	QSet<QString> seen;
 	for (const QJsonValue &value : plugins.toArray()) {
-		const QJsonObject entry = value.toObject();
-		Available plugin;
-		plugin.id = entry.value(QStringLiteral("id")).toString();
-		plugin.name = entry.value(QStringLiteral("name")).toString();
-		plugin.description = entry.value(QStringLiteral("description")).toString();
-		plugin.version = entry.value(QStringLiteral("version")).toString();
-		plugin.url = entry.value(QStringLiteral("url")).toString();
-		plugin.sha256 = entry.value(QStringLiteral("sha256")).toString().toLatin1();
-
-		int parts[3];
-		const QString who = plugin.id.isEmpty() ? QStringLiteral("a plugin") : plugin.id.left(64);
-		QString wrong;
-		if (!validId(plugin.id) || plugin.id == QLatin1String(kManagerId))
-			wrong = QStringLiteral("its id");
-		else if (seen.contains(plugin.id))
-			wrong = QStringLiteral("it is listed twice");
-		else if (!plainText(plugin.name, 64) || !plainText(plugin.description, 500))
-			wrong = QStringLiteral("its name or description");
-		else if (!readVersion(plugin.version, parts))
-			wrong = QStringLiteral("its version");
-		else if (!plugin.url.startsWith(source.downloads) || !safeRest(plugin.url.mid(source.downloads.size()), source.local))
-			wrong = QStringLiteral("its zip is not on Sarxina's releases");
-		else if (!hex.match(QString::fromLatin1(plugin.sha256)).hasMatch())
-			wrong = QStringLiteral("its SHA-256");
-		if (!wrong.isEmpty()) {
-			problems << QStringLiteral("%1 left out: %2").arg(who, wrong);
+		Available plugin = readEntry(value.toObject());
+		if (const QString wrong = pluginProblem(plugin, source, seen); !wrong.isEmpty()) {
+			problems << QStringLiteral("%1 left out: %2")
+					    .arg(plugin.id.isEmpty() ? QStringLiteral("a plugin") : plugin.id.left(64), wrong);
 			continue;
 		}
 		seen.insert(plugin.id);
 		list.push_back(std::move(plugin));
 	}
+	manager = readManager(document.object(), source, problems);
 	return true;
 }
 

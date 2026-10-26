@@ -13,7 +13,10 @@
 //   7. Zips: unpacked whole, every file checked, and nothing but the plugin's own files written.
 //   8. Installing, updating and uninstalling, laid out the way a portable OBS and ProgramData want them, with
 //      downloads that go wrong installing nothing, and what is left for the next start finished then.
-//   9. The dock: Install, Uninstall and Update, what each line says, and the list of plugins OBS runs.
+//   9. The dock: Install, Uninstall and Update, what each line says, and the list of plugins OBS runs; the dropdown
+//      scrolling once it holds many.
+//  9b. The manager updating itself, where it runs from: a portable OBS, ProgramData, and OBS's folder in Program
+//      Files, where it asks for administrator rights.
 //  10. The one Twitch connection, against a stand-in for Twitch that answers as Twitch's documentation shows:
 //      connecting with the device code flow, plugins' requests with the broadcaster, the Client-Id and the token added,
 //      Twitch's answers passed on as they came, a token refreshed once when it ran out, and every way it can go wrong.
@@ -35,11 +38,16 @@
 #include "manager-dock.hpp"
 #include "manager.hpp"
 #include "properties-form.hpp"
+#include "self-update.hpp"
 #include "store.hpp"
 #include "zip.hpp"
 
+#include <obs-frontend-api.h>
 #include <zlib.h>
 
+#include <QAbstractItemView>
+#include <QApplication>
+#include <QContextMenuEvent>
 #include <QCoreApplication>
 #include <QCheckBox>
 #include <QCryptographicHash>
@@ -54,11 +62,14 @@
 #include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QFontMetrics>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QAbstractButton>
 #include <QToolButton>
 #include <QUrlQuery>
 #include <QVBoxLayout>
@@ -763,15 +774,34 @@ bool catalog()
 	for (const auto &c : cases)
 		entries.append(c.entry);
 	std::vector<Available> list;
+	std::optional<Available> manager;
 	QStringList problems;
-	tally.expect(readIndex(listOf(entries), github, list, problems), "a list read");
+	tally.expect(readIndex(listOf(entries), github, list, manager, problems) && !manager, "a list read");
 	tally.expect(list.size() == 1 && list[0].id == "slinglive" && list[0].name == "SLINGLIVE" &&
 			     list[0].version == "1.3.0" && list[0].url == release && list[0].sha256 == hash,
 		     "only the plugin as released kept");
 	tally.expect(problems.size() == std::size(cases) - 1, "every other one named as left out");
-	tally.expect(!readIndex("not json", github, list, problems) && list.empty() &&
-			     !readIndex("{\"plugins\":{}}", github, list, problems),
+	tally.expect(!readIndex("not json", github, list, manager, problems) && list.empty() &&
+			     !readIndex("{\"plugins\":{}}", github, list, manager, problems),
 		     "a file that is not a list");
+
+	// The manager's own release, beside the plugins, where managers before 1.4.0 never look
+	const QString managerZip = github.downloads + "sarxina-obs-plugin-manager-v1.4.0/sarxina-obs-plugin-manager-1.4.0-windows-x64.zip";
+	const auto withManager = [&](const QString &version, const QString &url) {
+		QJsonObject index{{"plugins", QJsonArray{listed("slinglive", "1.3.0", release, hash)}}};
+		index.insert("manager", QJsonObject{{"version", version}, {"url", url}, {"sha256", QString::fromLatin1(hash)}});
+		return QJsonDocument(index).toJson(QJsonDocument::Compact);
+	};
+	problems.clear();
+	tally.expect(readIndex(withManager("1.4.0", managerZip), github, list, manager, problems) && list.size() == 1 &&
+			     manager && manager->id == kManagerId && manager->version == "1.4.0" && manager->url == managerZip &&
+			     manager->sha256 == hash && problems.isEmpty(),
+		     "the manager's own release read, the plugins as they were");
+	tally.expect(readIndex(withManager("1.4", managerZip), github, list, manager, problems) && list.size() == 1 && !manager,
+		     "the manager's release with a version that is not x.y.z: left out, the plugins kept");
+	tally.expect(readIndex(withManager("1.4.0", "https://example.com/m.zip"), github, list, manager, problems) &&
+			     list.size() == 1 && !manager,
+		     "the manager's release anywhere but Sarxina's releases: left out");
 
 	tally.expect(newer("1.10.0", "1.9.2") && newer("2.0.0", "1.99.99") && !newer("1.3.0", "1.3.0") &&
 			     !newer("1.2.9", "1.3.0") && !newer("1.4.0", "") && !newer("x", "1.0.0"),
@@ -1216,6 +1246,19 @@ QMenu *dropdown(ManagerDock &dock)
 	return nullptr;
 }
 
+// The ids of the dropdown's lines, top to bottom.
+QStringList choiceOrder(ManagerDock &dock)
+{
+	QStringList order;
+	QMenu *menu = dropdown(dock);
+	auto *view = menu ? menu->findChild<QScrollArea *>("choices") : nullptr;
+	QLayout *rows = view && view->widget() ? view->widget()->layout() : nullptr;
+	for (int i = 0; rows && i < rows->count(); i++)
+		if (QWidget *row = rows->itemAt(i)->widget(); row && row->objectName().startsWith("plugin:"))
+			order << row->objectName().mid(7);
+	return order;
+}
+
 // A plugin's line in the dropdown, and what is on it.
 QWidget *choice(ManagerDock &dock, const QString &id)
 {
@@ -1226,7 +1269,7 @@ QWidget *choice(ManagerDock &dock, const QString &id)
 QString button(ManagerDock &dock, const QString &id, const char *which = "install")
 {
 	QWidget *row = choice(dock, id);
-	QPushButton *button = row ? row->findChild<QPushButton *>(which) : nullptr;
+	QAbstractButton *button = row ? row->findChild<QAbstractButton *>(which) : nullptr;
 	return !button ? QStringLiteral("(none)") : button->isHidden() ? QStringLiteral("(hidden)") : button->text();
 }
 
@@ -1240,9 +1283,12 @@ QString note(ManagerDock &dock, const QString &id)
 void press(ManagerDock &dock, const QString &id, const char *which = "install")
 {
 	if (QWidget *row = choice(dock, id))
-		if (QPushButton *button = row->findChild<QPushButton *>(which))
+		if (QAbstractButton *button = row->findChild<QAbstractButton *>(which))
 			button->click();
 }
+
+// What the up arrow on a plugin's line in the list says when pointed at, or "(hidden)".
+QString arrowInList(ManagerDock &dock, const char *name);
 
 // A plugin's line in the list, by its name, and whether it shows.
 QWidget *line(ManagerDock &dock, const char *name)
@@ -1251,6 +1297,20 @@ QWidget *line(ManagerDock &dock, const char *name)
 		if (title->property("class").toString() == "indicator-expand" && title->text() == name)
 			return title->parentWidget();
 	return nullptr;
+}
+
+QString arrowInList(ManagerDock &dock, const char *name)
+{
+	QWidget *row = line(dock, name);
+	auto *arrow = row ? row->findChild<QToolButton *>(QStringLiteral("update")) : nullptr;
+	return !arrow ? QStringLiteral("(none)") : arrow->isHidden() ? QStringLiteral("(hidden)") : arrow->toolTip();
+}
+
+void pressArrowInList(ManagerDock &dock, const char *name)
+{
+	QWidget *row = line(dock, name);
+	if (auto *arrow = row ? row->findChild<QToolButton *>(QStringLiteral("update")) : nullptr)
+		arrow->click();
 }
 
 bool shown(ManagerDock &dock, const char *name)
@@ -1319,6 +1379,9 @@ bool theDock()
 	tally.expect(button(dock, "first", "update") == text("Update").arg("1.2.0") &&
 			     button(dock, "second", "update") == "(hidden)" && button(dock, "fresh", "update") == "(hidden)",
 		     "Update only for the one with a newer version");
+	tally.expect(arrowInList(dock, "Test plugin") == text("Update").arg("1.2.0") &&
+			     arrowInList(dock, "Another test plugin") == "(hidden)",
+		     "the up arrow in the list, only for the one with a newer version");
 
 	press(dock, "fresh");
 	tally.expect(button(dock, "fresh") == text("Downloading"), "pressing Install: downloading");
@@ -1339,14 +1402,210 @@ bool theDock()
 			     shown(dock, "Test plugin") && hasGear(dock, "Test plugin") && !dockSays(dock, text("Restart")),
 		     "Install again: back on and in the list, nothing to finish");
 
+	// The stand-in for GitHub serves "first" as a zip of the wrong files, so this update stops at the check of the zip,
+	// as a bad download would; installing a good one is checked in "installing".
+	pressArrowInList(dock, "Test plugin");
+	tally.expect(manager.store().state("first").busy && arrowInList(dock, "Test plugin") == "(hidden)" &&
+			     button(dock, "first", "update") == "(hidden)",
+		     "the up arrow in the list: the newer version downloading, the arrows away meanwhile");
+	waitFor([&] { return !manager.store().state("first").busy; });
+	tally.expect(!note(dock, "first").isEmpty() && !dockSays(dock, text("Restart")) &&
+			     arrowInList(dock, "Test plugin") == text("Update").arg("1.2.0"),
+		     "a download that is not the plugin: nothing changed, why in the note, the arrow back");
+
 	// The order in the dropdown: the list's, then the others
-	QStringList order;
-	for (QAction *action : dropdown(dock)->actions())
-		if (auto *widget = qobject_cast<QWidgetAction *>(action); widget && widget->defaultWidget() &&
-									   widget->defaultWidget()->objectName().startsWith("plugin:"))
-			order << widget->defaultWidget()->objectName().mid(7);
-	tally.expect(order == QStringList({"fresh", "first", "second"}), "the dropdown in the list's order");
+	tally.expect(choiceOrder(dock) == QStringList({"fresh", "first", "second"}), "the dropdown in the list's order");
+	auto *view = dropdown(dock)->findChild<QScrollArea *>("choices");
+	tally.expect(view && view->verticalScrollBarPolicy() == Qt::ScrollBarAlwaysOff, "three lines: no scrolling");
 	return tally.report("the dock", "steps as expected");
+}
+
+void saveDropdown(ManagerDock &dock, const QString &file);
+
+// The dropdown with many plugins: slim lines, and a list that scrolls instead of growing.
+bool manyPlugins(const QString &pictures)
+{
+	Tally tally;
+	StandInGitHub github;
+	QTemporaryDir folder;
+	QJsonArray many;
+	for (int i = 1; i <= 20; i++)
+		many.append(listed(QStringLiteral("plugin-%1").arg(i), "1.0.0", github.url("none.zip"), QByteArray(64, 'a')));
+	github.answers["/plugins.json"] = {200, listOf(many), {}};
+	Manager manager(Manager::Use::SelfTest, kNoChat, setupFor(github, {Layout::Kind::ObsFolder, folder.path()}, nullptr, {}));
+	ManagerDock dock(manager);
+	dock.setAttribute(Qt::WA_DontShowOnScreen);
+	dock.show();
+	manager.start();
+	tally.expect(waitFor([&] { return manager.store().list() == Store::List::Ready; }) && choiceOrder(dock).size() == 20,
+		     "20 plugins in the dropdown");
+	auto *view = dropdown(dock)->findChild<QScrollArea *>("choices");
+	QWidget *first = choice(dock, "plugin-1");
+	const int line = first ? first->minimumSizeHint().height() : 0; // as slim as the list lays it out
+	tally.expect(line > 0 && line <= 2 * QFontMetrics(first->font()).height(), "a line no taller than two lines of text");
+	tally.expect(view && view->verticalScrollBarPolicy() == Qt::ScrollBarAlwaysOn && view->height() < 20 * line &&
+			     view->height() >= 6 * line && view->widget()->sizeHint().height() > view->height(),
+		     "the list scrolls, showing 6 to 8 lines");
+	if (!pictures.isEmpty() && QDir().mkpath(pictures))
+		saveDropdown(dock, QDir(pictures).filePath("dropdown-many.png"));
+	return tally.report("many plugins", "checks as expected");
+}
+
+// ---- 9b. the manager updating itself --------------------------------------------------------------------------------
+
+// What the dock's line about the manager says, and its arrow's words or "(hidden)".
+QString managerSays(ManagerDock &dock)
+{
+	QWidget *line = dock.findChild<QWidget *>("manager");
+	QLabel *state = line ? line->findChild<QLabel *>("manager-state") : nullptr;
+	return !line || line->isHidden() || !state ? QString() : state->text();
+}
+
+QString managerArrow(ManagerDock &dock)
+{
+	QWidget *line = dock.findChild<QWidget *>("manager");
+	auto *arrow = line ? line->findChild<QToolButton *>("update") : nullptr;
+	return !arrow ? QStringLiteral("(none)") : arrow->isHidden() ? QStringLiteral("(hidden)") : arrow->toolTip();
+}
+
+void pressManagerArrow(ManagerDock &dock)
+{
+	if (QWidget *line = dock.findChild<QWidget *>("manager"))
+		if (auto *arrow = line->findChild<QToolButton *>("update"))
+			arrow->click();
+}
+
+// plugins.json with no plugins and the manager's own release.
+QByteArray managerList(const QString &version, const QString &url, const QByteArray &sha256)
+{
+	QJsonObject index{{"plugins", QJsonArray{}}};
+	index.insert("manager", QJsonObject{{"version", version}, {"url", url}, {"sha256", QString::fromLatin1(sha256)}});
+	return QJsonDocument(index).toJson(QJsonDocument::Compact);
+}
+
+// One way the manager can be installed: where its DLL is, and whether this process may write there.
+struct ManagerPlace {
+	const char *what;
+	Layout::Kind kind;
+	bool writable; // false: OBS's folder in Program Files, written as administrator
+};
+
+// The manager updating itself from 1.3.1 to 1.4.0 in one place, through its dock, and the next start.
+void updateManagerIn(const ManagerPlace &place, StandInGitHub &github, const QByteArray &newDll, Tally &tally)
+{
+	const std::string in = std::string(" (") + place.what + ")";
+	const QString id = QString::fromLatin1(kManagerId);
+	QTemporaryDir folder;
+	const Layout layout{place.kind, folder.filePath("obs")};
+	const QString dll = layout.dll(id), staging = folder.filePath("config/update");
+	writeFile(dll, "MZ manager 1.3.1");
+	writeFile(layout.data(id) + "/locale/en-US.ini", "old");
+	Pretend loaded;
+	loaded[id] = {Store::Loaded::State::Yes, dll, "1.3.1"};
+	int asAdmin = 0;
+	const auto setup = [&] {
+		Store::Setup setup = setupFor(github, layout, &loaded, {});
+		setup.staging = staging;
+		setup.writable = [&place](const QString &) { return place.writable; };
+		setup.runAsAdmin = [&asAdmin](const QString &script, std::function<void(int)> done) {
+			asAdmin++;
+			selfupdate::runPlain(script, std::move(done)); // the same script, without asking Windows
+		};
+		return setup;
+	};
+
+	{
+		Manager manager(Manager::Use::SelfTest, kNoChat, setup());
+		ManagerDock dock(manager);
+		dock.setAttribute(Qt::WA_DontShowOnScreen);
+		dock.show();
+		manager.start();
+		waitFor([&] { return manager.store().list() == Store::List::Ready; });
+		tally.expect(managerArrow(dock) == text("Update").arg("1.4.0") && managerSays(dock) == text("Manager").arg("1.4.0"),
+			     "the up arrow for the manager, Update to 1.4.0" + in);
+		pressManagerArrow(dock);
+		tally.expect(managerSays(dock) == text("Downloading") && managerArrow(dock) == "(hidden)", "downloading" + in);
+		waitFor([&] { return !manager.store().managerState().busy; }, 20000);
+		tally.expect(managerSays(dock) == text("Restart") && managerArrow(dock) == "(hidden)" && asAdmin == (place.writable ? 0 : 1),
+			     place.writable ? "updated at once: restart OBS to finish" + in
+					    : "updated as administrator: restart OBS to finish" + in);
+		tally.expect(readFile(dll) == newDll && readFile(layout.data(id) + "/locale/en-US.ini").startsWith("Description="),
+			     "the new manager where the old one was" + in);
+		const QString aside = place.writable ? dll + ".old" : staging + "/" + id + ".dll.old";
+		tally.expect(readFile(aside) == "MZ manager 1.3.1" && (place.writable || !files::exists(dll + ".old")),
+			     place.writable ? "the running one moved aside beside it" + in
+					    : "the running one moved aside out of OBS's folder" + in);
+	}
+
+	// The next start runs 1.4.0: what was left is deleted, and there is nothing newer.
+	loaded[id].version = "1.4.0";
+	Manager manager(Manager::Use::SelfTest, kNoChat, setup());
+	ManagerDock dock(manager);
+	manager.start();
+	waitFor([&] { return manager.store().list() == Store::List::Ready; });
+	tally.expect(!files::exists(dll + ".old") && !files::exists(staging) && managerSays(dock).isEmpty() &&
+			     managerArrow(dock) == "(hidden)",
+		     "next start: the old one deleted, up to date, nothing said" + in);
+}
+
+bool updatingManager()
+{
+	Tally tally;
+	StandInGitHub github;
+	const QString id = QString::fromLatin1(kManagerId);
+	const QByteArray newDll = QByteArray("MZ manager 1.4.0 ") + QByteArray(4000, 'm');
+	const QByteArray zip = pluginZip(id, newDll);
+	github.answers["/manager.zip"] = {200, zip, {}};
+	github.answers["/plugins.json"] = {200, managerList("1.4.0", github.url("manager.zip"), sha(zip)), {}};
+
+	for (const ManagerPlace &place : {ManagerPlace{"portable OBS", Layout::Kind::ObsFolder, true},
+					  ManagerPlace{"ProgramData", Layout::Kind::ProgramData, true},
+					  ManagerPlace{"Program Files", Layout::Kind::ObsFolder, false}})
+		updateManagerIn(place, github, newDll, tally);
+
+	// Where it can go wrong: the streamer says no to Windows, a download that does not match, a manager somewhere else
+	const auto attempt = [&](const QString &dll, RunScript runAsAdmin, bool writable) {
+		QTemporaryDir config;
+		Pretend loaded;
+		loaded[id] = {Store::Loaded::State::Yes, dll, "1.3.1"};
+		Store::Setup setup = setupFor(github, Layout::holding(dll, id).value_or(Layout{}), &loaded, {});
+		setup.staging = config.filePath("update");
+		setup.writable = [writable](const QString &) { return writable; };
+		setup.runAsAdmin = std::move(runAsAdmin);
+		Store store(setup);
+		store.start();
+		waitFor([&] { return store.list() == Store::List::Ready; });
+		store.updateManager();
+		waitFor([&] { return !store.managerState().busy; }, 20000);
+		return store.managerState();
+	};
+	QTemporaryDir folder;
+	const Layout programFiles{Layout::Kind::ObsFolder, folder.filePath("Program Files/obs-studio")};
+	writeFile(programFiles.dll(id), "MZ manager 1.3.1");
+	const auto declined = [](const QString &, std::function<void(int)> done) { done(-1); };
+	Store::State state = attempt(programFiles.dll(id), declined, false);
+	tally.expect(state.change == Store::Change::None && state.note.startsWith(text("Problem.NotAllowed").left(20)) &&
+			     readFile(programFiles.dll(id)) == "MZ manager 1.3.1" && state.canUpdate,
+		     "Windows not allowed: nothing changed, why, and the arrow back");
+
+	github.answers["/plugins.json"] = {200, managerList("1.4.0", github.url("manager.zip"), QByteArray(64, '0')), {}};
+	state = attempt(programFiles.dll(id), declined, true);
+	tally.expect(state.change == Store::Change::None && state.note == text("Problem.Checksum") &&
+			     readFile(programFiles.dll(id)) == "MZ manager 1.3.1",
+		     "a download that does not match: nothing changed");
+
+	github.answers["/plugins.json"] = {200, managerList("1.4.0", github.url("manager.zip"), sha(zip)), {}};
+	const QString elsewhere = folder.filePath("Downloads/sarxina-obs-plugin-manager.dll");
+	writeFile(elsewhere, "MZ manager 1.3.1");
+	state = attempt(elsewhere, declined, true);
+	tally.expect(state.change == Store::Change::None && state.note.startsWith(text("Problem.ManagerElsewhere").left(20)) &&
+			     readFile(elsewhere) == "MZ manager 1.3.1",
+		     "a manager not where its zip puts it: left alone, and why");
+
+	github.answers["/plugins.json"] = {200, managerList("1.3.1", github.url("manager.zip"), sha(zip)), {}};
+	state = attempt(programFiles.dll(id), declined, true);
+	tally.expect(!state.canUpdate && state.note.isEmpty(), "the same version on the list: no arrow");
+	return tally.report("updating the manager", "steps as expected");
 }
 
 void saveDropdown(ManagerDock &dock, const QString &file)
@@ -2297,6 +2556,8 @@ bool runSelfTest(const char *picturesFolder)
 	passed &= zips();
 	passed &= installing();
 	passed &= theDock();
+	passed &= manyPlugins(QString::fromUtf8(picturesFolder ? picturesFolder : ""));
+	passed &= updatingManager();
 	passed &= twitchApi();
 	passed &= twitchDock();
 	passed &= settingsForm();
@@ -2437,19 +2698,62 @@ static void connectInObs(ManagerDock &dock, Manager &manager)
 // the dock shows for every plugin, presses that button in the dock the way a click does, and once it has settled says
 // again what the dock shows. With SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES, it paints the dock and the dropdown.
 // "Connect:twitch" connects Twitch instead (connectInObs).
+// In the menu OBS is showing for a right-click on its Sources list, picks "Sarxina Source" > `name`, and says in the
+// log what the submenu offered.
+void pickFromSourcesMenu(const QString &name)
+{
+	auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+	QMenu *submenu = nullptr;
+	for (QAction *action : menu ? menu->actions() : QList<QAction *>())
+		if (action->menu() && action->text() == text("SarxinaSource"))
+			submenu = action->menu();
+	QStringList offered;
+	QAction *pick = nullptr;
+	for (QAction *action : submenu ? submenu->actions() : QList<QAction *>()) {
+		offered << action->text();
+		if (action->text() == name)
+			pick = action;
+	}
+	test::report(pick != nullptr, "in OBS, a right-click on Sources offers Sarxina Source > [%s]: %s",
+		     offered.join(QStringLiteral(", ")).toUtf8().constData(), pick ? "OK" : "FAILED");
+	if (menu)
+		menu->close();
+	if (pick)
+		pick->trigger();
+}
+
+// Right-clicks OBS's Sources list the way the streamer does, and picks "Sarxina Source" > `name`.
+void pickSarxinaSourceInObs(const QString &name)
+{
+	auto *window = static_cast<QWidget *>(obs_frontend_get_main_window());
+	auto *sources = window ? window->findChild<QAbstractItemView *>(QStringLiteral("sources")) : nullptr;
+	if (!sources) {
+		test::report(false, "in OBS: no Sources list to right-click: FAILED");
+		return;
+	}
+	QTimer::singleShot(400, [name] { pickFromSourcesMenu(name); }); // runs while OBS's menu is open
+	QWidget *list = sources->viewport();
+	const QPoint at(list->width() / 2, list->height() - 4);
+	QContextMenuEvent rightClick(QContextMenuEvent::Mouse, at, list->mapToGlobal(at));
+	QApplication::sendEvent(list, &rightClick);
+}
+
 void pressInObs(ManagerDock &dock, Manager &manager, const QString &pressing, const QString &pictures)
 {
 	const QString which = pressing.section(':', 0, 0), id = pressing.section(':', 1);
+	if (which == "SarxinaSource") {
+		pickSarxinaSourceInObs(id);
+		return;
+	}
 	if (which == "Connect" && id == "twitch") {
 		connectInObs(dock, manager);
 		return;
 	}
 	const auto describe = [&dock, &manager](const char *when) {
-		for (QAction *action : dropdown(dock) ? dropdown(dock)->actions() : QList<QAction *>()) {
-			auto *widget = qobject_cast<QWidgetAction *>(action);
-			if (!widget || !widget->defaultWidget() || !widget->defaultWidget()->objectName().startsWith("plugin:"))
-				continue;
-			const QString plugin = widget->defaultWidget()->objectName().mid(7);
+		const QString says = managerSays(dock);
+		test::report(true, "in OBS, %s: the manager: \"%s\" [%s]", when, says.toUtf8().constData(),
+			     managerArrow(dock).toUtf8().constData());
+		for (const QString &plugin : choiceOrder(dock)) {
 			const QString update = button(dock, plugin, "update");
 			test::report(true, "in OBS, %s: %s: [%s]%s%s%s", when, plugin.toUtf8().constData(),
 				     button(dock, plugin).toUtf8().constData(),
@@ -2482,14 +2786,18 @@ void pressInObs(ManagerDock &dock, Manager &manager, const QString &pressing, co
 			}
 			const QString wanted = text(which == "Update" ? "Update" : which == "Uninstall" ? "Uninstall" : "Install");
 			const char *kind = which == "Update" ? "update" : "install";
-			const QString showing = button(dock, id, kind);
+			const bool itself = id == QLatin1String(kManagerId);
+			const QString showing = itself ? managerArrow(dock) : button(dock, id, kind);
 			const bool right = which == "Update" ? showing.startsWith(wanted.section(' ', 0, 0)) : showing == wanted;
 			test::report(right, "in OBS: pressing %s on %s (the button says %s)", which.toUtf8().constData(),
 				     id.toUtf8().constData(), showing.toUtf8().constData());
-			if (right)
+			if (right && itself)
+				pressManagerArrow(dock);
+			else if (right)
 				press(dock, id, kind);
 			*step = 1;
-		} else if (!manager.store().state(id).busy) {
+		} else if (!(id == QLatin1String(kManagerId) ? manager.store().managerState().busy
+							      : manager.store().state(id).busy)) {
 			describe("after");
 			paint("after");
 			timer->stop();

@@ -50,6 +50,18 @@ Layout Layout::forObs()
 	return {Kind::ProgramData, QDir::cleanPath(QString::fromUtf8(plugins.Get()))};
 }
 
+std::optional<Layout> Layout::holding(const QString &dll, const QString &id)
+{
+	const QString path = QDir::cleanPath(QDir::fromNativeSeparators(dll));
+	const QString inObsFolder = QStringLiteral("/obs-plugins/64bit/%1.dll").arg(id);
+	const QString inProgramData = QStringLiteral("/%1/bin/64bit/%1.dll").arg(id);
+	if (path.endsWith(inObsFolder, Qt::CaseInsensitive))
+		return Layout{Kind::ObsFolder, path.chopped(inObsFolder.size())};
+	if (path.endsWith(inProgramData, Qt::CaseInsensitive))
+		return Layout{Kind::ProgramData, path.chopped(inProgramData.size())};
+	return std::nullopt;
+}
+
 namespace files {
 
 namespace {
@@ -103,44 +115,63 @@ bool exists(const QString &path)
 	return QFileInfo::exists(path);
 }
 
+bool writable(const QString &folder)
+{
+	QFile probe(QDir(folder).filePath(QStringLiteral(".sarxina-write-check")));
+	if (!probe.open(QIODevice::WriteOnly))
+		return false;
+	probe.close();
+	probe.remove();
+	return true;
+}
+
 bool samePath(const QString &a, const QString &b)
 {
 	return QDir::cleanPath(QFileInfo(a).absoluteFilePath()).compare(QDir::cleanPath(QFileInfo(b).absoluteFilePath()),
 									 Qt::CaseInsensitive) == 0;
 }
 
-bool write(const Layout &layout, const QString &id, const std::vector<ZipFile> &zip, bool dllInUse, QString &problem)
+std::optional<std::vector<Placement>> place(const Layout &layout, const QString &id, const std::vector<ZipFile> &zip,
+					    QString &problem)
 {
 	if (layout.root.isEmpty() || !validId(id)) {
 		problem = QStringLiteral("nowhere to install it");
-		return false;
+		return std::nullopt;
 	}
-
-	// Where each file of the zip goes. Anything else in it, and the whole zip is refused.
 	const QString dllName = QStringLiteral("obs-plugins/64bit/%1.dll").arg(id);
 	const QString dataPrefix = QStringLiteral("data/obs-plugins/%1/").arg(id);
-	std::vector<std::pair<QString, const QByteArray *>> data; // target, contents
+	std::vector<Placement> placed;
 	const QByteArray *dll = nullptr;
 	QSet<QString> seen;
 	for (const ZipFile &file : zip) {
 		if (seen.contains(file.name.toLower())) {
 			problem = QStringLiteral("the zip holds a file twice");
-			return false;
+			return std::nullopt;
 		}
 		seen.insert(file.name.toLower());
 		if (file.name == dllName) {
 			dll = &file.data;
 		} else if (file.name.startsWith(dataPrefix) && plainPath(file.name.mid(dataPrefix.size()))) {
-			data.emplace_back(layout.data(id) + QLatin1Char('/') + file.name.mid(dataPrefix.size()), &file.data);
+			placed.push_back({layout.data(id) + QLatin1Char('/') + file.name.mid(dataPrefix.size()), &file.data});
 		} else {
 			problem = QStringLiteral("the zip holds something that is not part of %1").arg(id);
-			return false;
+			return std::nullopt;
 		}
 	}
 	if (!dll) {
 		problem = QStringLiteral("the zip has no %1.dll").arg(id);
-		return false;
+		return std::nullopt;
 	}
+	placed.push_back({layout.dll(id), dll}); // last: the plugin is only there once its DLL is
+	return placed;
+}
+
+bool write(const Layout &layout, const QString &id, const std::vector<ZipFile> &zip, bool dllInUse, QString &problem)
+{
+	const std::optional<std::vector<Placement>> placed = place(layout, id, zip, problem);
+	if (!placed)
+		return false;
+	const std::vector<Placement> &data = *placed;
 
 	// Everything is written beside where it goes first, so that a problem leaves the plugin as it was.
 	std::vector<QString> written;
@@ -148,7 +179,6 @@ bool write(const Layout &layout, const QString &id, const std::vector<ZipFile> &
 		for (const QString &part : written)
 			QFile::remove(part);
 	};
-	data.emplace_back(layout.dll(id), dll); // last: the plugin is only there once its DLL is
 	for (const auto &[target, contents] : data) {
 		const QString part = target + kPart;
 		QFile out(part);

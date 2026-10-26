@@ -3,6 +3,9 @@
 // The list is plugins.json on the main branch of github.com/Sarxina/sarxina-obs-plugins: each plugin's name, what it
 // does, its version, the address of its zip on the repository's releases, and the zip's SHA-256. The manager fetches
 // it over HTTPS and takes a zip only from that repository's releases, and only if its SHA-256 matches.
+//
+// The manager's own latest release is in the same file, under "manager" beside "plugins", with its version, the
+// address of its zip and the zip's SHA-256. Managers older than 1.4.0 read only "plugins", so they never see it.
 #pragma once
 
 #include <QByteArray>
@@ -43,10 +46,15 @@ struct Available {
 constexpr qint64 kLargestIndex = 1 << 20; // bytes
 constexpr qint64 kLargestZip = 64 << 20;
 
+// The manager's own module name.
+inline constexpr const char *kManagerId = "sarxina-obs-plugin-manager";
+
 // Reads plugins.json. A plugin that is not right (an id that is not a module name, a zip from anywhere but
 // `source.downloads`, no SHA-256, a version that is not x.y.z, the manager itself, one listed twice) is left out and
-// named in `problems`. False if the file is not a list of plugins at all.
-bool readIndex(const QByteArray &json, const Source &source, std::vector<Available> &list, QStringList &problems);
+// named in `problems`. The manager's own release goes into `manager`, or nothing when it is not there or not right.
+// False if the file is not a list of plugins at all.
+bool readIndex(const QByteArray &json, const Source &source, std::vector<Available> &list,
+	       std::optional<Available> &manager, QStringList &problems);
 
 // A module name the manager installs: 1 to 64 lower-case letters, digits and -, starting with a letter.
 bool validId(const QString &id);

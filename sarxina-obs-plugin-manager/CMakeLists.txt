@@ -14,7 +14,7 @@ endif()
 sarxina_add_obs_module(
   sarxina-obs-plugin-manager
   TITLE "Sarxina OBS Plugin Manager"
-  VERSION 1.2.0
+  VERSION 1.4.0
   DESCRIPTION "Sarxina OBS Plugin Manager dock for OBS Studio"
   SOURCES
     src/catalog.cpp
@@ -34,6 +34,8 @@ sarxina_add_obs_module(
     src/properties-form.cpp
     src/properties-form.hpp
     src/self-test.cpp
+    src/self-update.cpp
+    src/self-update.hpp
     src/store.cpp
     src/store.hpp
     src/twitch-api.cpp
@@ -48,7 +50,7 @@ sarxina_add_obs_module(
     src/websocket.hpp
     src/zip.cpp
     src/zip.hpp
-  MODULE_SOURCES src/plugin-main.cpp
+  MODULE_SOURCES src/plugin-main.cpp src/source-menu.cpp src/source-menu.hpp
   # libcurl and zlib come with OBS, beside obs.dll; version reads a DLL's version
   LIBRARIES CURL::libcurl ZLIB::ZLIB ws2_32 version Qt6::Network
 )

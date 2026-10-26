@@ -16,24 +16,23 @@ add_subdirectory(slinglive)
 add_subdirectory(plinkolive)
 add_subdirectory(plinkotoggle)
 add_subdirectory(jobapplication)
-add_subdirectory(chatvillage)
+add_subdirectory(chatsaga)
 add_subdirectory(sarxina-obs-plugin-manager)
-add_subdirectory(sarxina-parametric-eq)
-add_subdirectory(sarxina-noise-gate)
-add_subdirectory(sarxina-hard-limiter)
+add_subdirectory(voicegoodifier)
 
 # The smallest plugin the Sarxina OBS Plugin Manager can run, for anyone making their own. Never released.
 add_subdirectory(examples/example-plugin)
 
-# The list of plugins the Sarxina OBS Plugin Manager offers to install: every released plugin but the manager itself.
-# The target plugins-index writes it into plugins.json (see BUILDING.md).
+# The list of plugins the Sarxina OBS Plugin Manager offers to install, every released plugin but the manager itself,
+# and the manager's own release, which it updates itself from. The target plugins-index writes it into plugins.json
+# (see BUILDING.md).
 sarxina_add_plugins_index(
+  MANAGER sarxina-obs-plugin-manager
+  PLUGINS
   slinglive
   plinkolive
   plinkotoggle
   jobapplication
-  chatvillage
-  sarxina-parametric-eq
-  sarxina-noise-gate
-  sarxina-hard-limiter
+  chatsaga
+  voicegoodifier
 )

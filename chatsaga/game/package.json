@@ -1,0 +1,13 @@
+{
+    "name": "chatsaga",
+    "main": "index.html",
+    "js-flags": "--expose-gc",
+    "chromium-args": "--disable-backgrounding-occluded-windows --disable-renderer-backgrounding --disable-background-timer-throttling",
+    "window": {
+        "title": "",
+        "width": 1920,
+        "height": 1080,
+        "position": "center",
+        "icon": "icon/icon.png"
+    }
+}

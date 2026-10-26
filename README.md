@@ -1,37 +1,68 @@
 # Sarxina OBS Plugins
 
-Silly (and some useful) OBS plugins for VTubers and streamers. Grab the **Sarxina OBS Plugin Manager**, then install whichever plugins you want right from it.
+OBS plugins I made for my streams: a few silly ones and a few useful ones. You install the **Sarxina OBS Plugin Manager** once, and then add or remove the others from inside OBS.
 
-## Sarxina OBS Plugin Manager
+Windows only, OBS Studio 32.2 or newer.
 
-One dock where you pick your plugins and change their settings behind each one's gear. It also hooks them up to VTube Studio and to Twitch: hit **Connect** next to **Twitch** in the dock and enter the code it shows at twitch.tv/activate, once. That one connection is all of Twitch for every plugin: your chat's commands, channel point redeems, and the rewards in their settings. Not to be confused with OBS's own Plugin Manager under Tools; this one is just for Sarxina plugins.
+## Installing
 
-**Install it:** close OBS, download the manager's zip from [the latest release](../../releases/latest) and extract it into your OBS folder (usually `C:\Program Files\obs-studio`). Open OBS, tick **Sarxina OBS Plugin Manager** under **Docks**, hit **Install** on the plugins you want and restart OBS. **Uninstall** takes one back out.
+1. Close OBS.
+2. Download the manager's zip from [the latest release](../../releases/latest) and extract it into your OBS folder (usually `C:\Program Files\obs-studio`).
+3. Open OBS and tick **Sarxina OBS Plugin Manager** in the **Docks** menu.
+4. In the dock, pick a plugin from the list, hit **Install**, then restart OBS. **Uninstall** and **Update** work the same way.
 
-Needs OBS Studio 32.2 or newer on Windows.
+When a new version of the manager itself is out, an up arrow shows at the top of its dock. Click it and restart OBS. If OBS is in Program Files, Windows asks first whether the manager may change files there.
+
+Each plugin's settings are behind the gear next to it in the dock. (This isn't OBS's own plugin manager under Tools. It only handles these plugins.)
+
+If you'd rather not use the manager, every plugin's zip is on [Releases](../../releases). Close OBS and extract the zip into your OBS folder. Anything that uses Twitch or VTube Studio still needs the manager, though.
+
+## Connecting Twitch
+
+The manager holds one Twitch connection, and every plugin uses that same connection for chat, channel point redeems and the list of who's in chat. OBS's own Twitch account (Settings > Stream) isn't used.
+
+1. In the manager's dock, hit **Connect** next to **Twitch**.
+2. Your browser opens twitch.tv/activate, and the dock shows a code. Enter the code there and allow the app.
+3. The dock then says **Connected as** your channel, and the line under it says whose chat it's reading.
+
+You only do this once. The manager remembers the connection and keeps it fresh. Your tokens stay in the manager's settings folder and never go into OBS's log.
+
+When an update adds a plugin that needs a new Twitch permission, the dock says **Needs reconnecting**. Hit **Connect** again and enter the new code. ChatSaga is one of these: it has to see who's in your chat.
+
+Channel point rewards only work on affiliate or partner channels. That's Twitch's rule, not the plugins'.
+
+## Connecting VTube Studio
+
+PlinkoToggle and JobApplication talk to VTube Studio through the manager.
+
+1. In VTube Studio, open Settings and turn on **Start API (allow plugins)**. The port it shows is usually 8001.
+2. In the manager's dock, put that port next to **VTube Studio** and hit **Connect**.
+3. VTube Studio pops up a box asking whether to allow **Sarxina OBS Plugin Manager**. Click **Allow**.
+
+VTube Studio only asks the first time. After that the manager reconnects on its own whenever OBS and VTube Studio are both running, and it never pops the box up unless you hit Connect. If you said no by mistake, hit **Connect** again.
 
 ## The plugins
 
 | Plugin | What it is | What it does |
 |---|---|---|
-| **SlingLive** | Dock | Slingshot your head at your Record and Go Live buttons. Good luck hitting the right one. |
+| **SlingLive** | Dock | Fling your head at OBS's buttons with a slingshot. Good luck hitting the right one. |
 | **PlinkoLive** | Dock | Drop your head down a Plinko board to decide whether you Record, Go Live or Exit. |
-| **PlinkoToggle** | Source | A Plinko board on stream that chat plays: a chat command (or a channel point redeem) drops a ball, and whichever VTube Studio toggle it lands on gets switched on your model. The board grows with your toggles. |
-| **JobApplication** | VTube Studio item | A big job application pinned to your model's chest that moves like paper: it lags behind you, swings back, curls and flaps, run by VTube Studio's own Live2D physics. Chat fills it in: each channel point redeem adds a line of work experience with the viewer's name. A hotkey brings it up and takes it away. |
-| **ChatVillage** | Source | A little RPG town where everyone in your chat is an NPC, strolling around with their name over their head. Walk up and talk to one and they say the last thing they said in chat, or *lurking* if they haven't said anything this stream. People who leave chat leave town. |
-| **Sarxina Parametric EQ** | Audio filter | A drag-the-curve EQ laid out like Adobe Audition's Parametric Equalizer. |
-| **Sarxina Noise Gate** | Audio filter | Cuts the room noise under your voice without chopping the ends of your words. |
-| **Sarxina Hard Limiter** | Audio filter | A look-ahead limiter like Audition's Hard Limiter; nothing ever goes over the ceiling. |
+| **PlinkoToggle** | Source | A Plinko board where chat's drops switch your VTube Studio toggles. |
+| **JobApplication** | VTube Studio item | A job application on your model that chat fills out, one line of work experience per redeem. |
+| **ChatSaga** | Source | Your chat as a JRPG town: everyone in chat is an NPC with a class, stats and their last message. |
+| **VoiceGoodifier** | Audio filters | A simple plug and play filter chain for your mic: a noise gate, a drag-the-curve EQ and a hard limiter. |
 
 ![SlingLive in OBS](docs/slinglive-demo.gif)
 
-**Where they show up after installing:**
-- **Docks:** the OBS menu **Docks**, then tick it.
-- **Source** (PlinkoToggle): in **Sources**, press **+** and pick **PlinkoToggle**. Its settings (command or redeem, cooldown) are behind its gear in the manager: pick one of your channel's redeems, or hit **Create a new redeem**. A redeem needs **Require Viewer to Enter Text** turned on, or Twitch won't show it in chat (the button turns it on).
-- **JobApplication:** nothing to add to a scene; it shows up on your model in VTube Studio. Set its hotkey in **Settings > Hotkeys**. Behind its gear in the manager, pick the redeem viewers use to add a line, or hit **Create a new redeem** (it asks the viewer for text and gets the plugin's cooldown); you can switch to a `!jobapp <text>` chat command there instead, and change the paper's size. A line brings the paper up if it's down, and the lines stay until OBS closes, or until you hit **Clear the application** there, which takes every line off.
-  - **The first time the paper comes up,** VTube Studio shows a tip about moving and rotating Live2D items, and it can't load items while that's open, so the paper waits. Tick **Don't show again** and hit **OK**.
-  - The paper is a Live2D item the plugin puts in VTube Studio's `Items` folder, as `SarxinaJobApplication`; how hard it swings can be changed in VTube Studio's settings for that item. If VTube Studio can't be found, it comes up as a flat picture instead, and the first time VTube Studio asks whether the manager may load custom images: hit **Allow**.
-- **ChatVillage:** in **Sources**, press **+** and pick **ChatVillage**. It needs Twitch connected in the manager to see who's in your chat (without it, only people who chat show up). If you connected Twitch before ChatVillage came out, hit **Connect** next to **Twitch** once more: listing your chatters needs one more permission. Your bots (Nightbot, StreamElements and friends) stay out, and you're the player in the middle, not an NPC. While OBS runs, the town is also a web page at http://127.0.0.1:4790/ on your PC, if you want to watch it in a browser.
-- **Audio filters:** right-click your mic, **Filters**, then **+**. The EQ's **Open EQ curve** button opens the curve.
+## Where each one shows up
 
-Rather install one by hand? Every plugin's zip is on [Releases](../../releases): close OBS and extract it into your OBS folder.
+- **SlingLive, PlinkoLive:** tick them in the **Docks** menu.
+- **PlinkoToggle:** in **Sources**, press **+** and pick **PlinkoToggle**. Behind its gear in the manager you choose between a chat command and one of your channel's redeems, or hit **Create a new redeem**. A redeem needs **Require Viewer to Enter Text** on, or Twitch won't show it in chat. The button turns that on for you.
+- **JobApplication:** nothing to add to a scene. It appears on your model in VTube Studio. Set its hotkey in **Settings > Hotkeys**. Behind its gear, pick the redeem viewers use to add a line (or switch to a `!jobapp <text>` command), change the paper's size, or hit **Clear the application** to wipe it.
+  - The first time the paper comes up, VTube Studio shows a tip about moving Live2D items, and the paper waits until you close it. Tick **Don't show again** and hit **OK**.
+  - The paper goes into VTube Studio's `Items` folder as `SarxinaJobApplication`. If VTube Studio can't load it, a flat picture shows instead, and VTube Studio asks once whether the manager may load custom images. Hit **Allow**.
+- **ChatSaga:** right-click the **Sources** list and pick **Sarxina Source > ChatSaga**. The town gets added to the scene you're editing, sized to fit. You can also add it the usual way with **+**.
+  - It needs Twitch connected to see who's in chat. Without the connection, only people who type show up.
+  - Bots like Nightbot and StreamElements are left out, and you're the player in the middle, not an NPC.
+  - While OBS is running, the town is also a web page at http://127.0.0.1:4790/ if you want to watch it in a browser.
+- **VoiceGoodifier:** right-click your mic, pick **Filters**, then **+**, and choose the voice chain or one of the three filters.

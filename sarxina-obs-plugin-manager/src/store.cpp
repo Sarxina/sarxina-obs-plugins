@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPointer>
 #include <QSaveFile>
 
 namespace sarxina {
@@ -44,12 +45,25 @@ Store::Loaded loadedInObs(const QString &id)
 	return {Store::Loaded::State::Yes, dll, files::version(dll)};
 }
 
+// A file or folder in the manager's config folder, as a whole path: a portable OBS gives it relative to its program.
+QString configPath(const char *name)
+{
+	BPtr<char> path(obs_module_config_path(name));
+	BPtr<char> whole(path ? os_get_abs_path_ptr(path) : nullptr);
+	return whole ? QDir::cleanPath(QString::fromUtf8(whole.Get())) : QString();
+}
+
 } // namespace
 
 Store::Setup Store::Setup::forObs()
 {
-	BPtr<char> remembered(obs_module_config_path("store.json"));
-	return {Source::forObs(), Layout::forObs(), loadedInObs, QString::fromUtf8(remembered ? remembered.Get() : "")};
+	Setup setup;
+	setup.source = Source::forObs();
+	setup.layout = Layout::forObs();
+	setup.loaded = loadedInObs;
+	setup.remembered = configPath("store.json");
+	setup.staging = configPath("update");
+	return setup;
 }
 
 Store::Store(Setup setup, QObject *parent) : QObject(parent), setup_(std::move(setup))
@@ -70,7 +84,9 @@ void Store::start()
 	started_ = true;
 	for (const Available &plugin : available_)
 		loaded(plugin.id);
+	finishManagerUpdate();
 	emit listChanged();
+	emit managerChanged();
 	refresh();
 }
 
@@ -95,11 +111,13 @@ void Store::refresh()
 				     return;
 			     QStringList problems;
 			     std::vector<Available> list;
-			     const bool read = ok && readIndex(body, setup_.source, list, problems);
+			     std::optional<Available> manager;
+			     const bool read = ok && readIndex(body, setup_.source, list, manager, problems);
 			     for (const QString &line : problems)
 				     blog(LOG_WARNING, "%s the list of plugins: %s", kLog, utf8(line).constData());
 			     if (read) {
 				     available_ = std::move(list);
+				     manager_ = std::move(manager);
 				     listJson_ = body;
 				     list_ = List::Ready;
 				     for (const Available &plugin : available_)
@@ -113,6 +131,7 @@ void Store::refresh()
 				     list_ = available_.empty() ? List::Failed : List::Ready;
 			     }
 			     emit listChanged();
+			     emit managerChanged();
 		     });
 }
 
@@ -313,6 +332,123 @@ void Store::uninstall(const QString &id)
 	emit changed(id);
 }
 
+// ---- the manager itself ---------------------------------------------------------------------------------------------
+
+Store::State Store::managerState()
+{
+	const Loaded running = loaded(QString::fromLatin1(kManagerId));
+	State state;
+	state.installed = true;
+	state.busy = managerEntry_.busy;
+	state.change = managerEntry_.change;
+	state.note = managerEntry_.problem;
+	if (manager_ && managerEntry_.change == Change::None && newer(manager_->version, running.version)) {
+		state.canUpdate = !managerEntry_.busy;
+		state.newVersion = manager_->version;
+	}
+	return state;
+}
+
+void Store::updateManager()
+{
+	if (closed_ || !managerState().canUpdate)
+		return;
+	managerEntry_.problem.clear();
+	managerEntry_.busy = true;
+	emit managerChanged();
+	blog(LOG_INFO, "%s downloading the manager %s from %s", kLog, utf8(manager_->version).constData(),
+	     utf8(manager_->url).constData());
+	fetcher_.get(setup_.source, manager_->url, kLargestZip,
+		     [this, sha256 = manager_->sha256](bool ok, const QByteArray &body, const QString &problem) {
+			     managerEntry_.busy = false;
+			     if (closed_)
+				     return;
+			     if (!ok)
+				     managerEntry_.problem = text("Problem.Download").arg(problem);
+			     else if (QCryptographicHash::hash(body, QCryptographicHash::Sha256).toHex() != sha256)
+				     managerEntry_.problem = text("Problem.Checksum");
+			     else
+				     installManager(body);
+			     if (!managerEntry_.problem.isEmpty())
+				     blog(LOG_WARNING, "%s the manager not updated: %s", kLog,
+					  utf8(managerEntry_.problem).constData());
+			     emit managerChanged();
+		     });
+}
+
+// Puts the new manager where the running one is: at once where this process may write, else as administrator.
+void Store::installManager(const QByteArray &zip)
+{
+	const QString id = QString::fromLatin1(kManagerId);
+	std::vector<ZipFile> unpacked;
+	QString why;
+	if (!readZip(zip, unpacked, why)) {
+		managerEntry_.problem = text("Problem.Zip").arg(why);
+		return;
+	}
+	const QString dll = loaded(id).dll;
+	const std::optional<Layout> layout = Layout::holding(dll, id);
+	if (!layout) {
+		managerEntry_.problem = text("Problem.ManagerElsewhere").arg(QDir::toNativeSeparators(QFileInfo(dll).absolutePath()));
+		return;
+	}
+	if (setup_.writable(QFileInfo(dll).absolutePath()) && files::write(*layout, id, unpacked, true, why)) {
+		managerEntry_.change = Change::Updated;
+		blog(LOG_INFO, "%s the manager updated into %s: restart OBS to finish", kLog,
+		     utf8(QDir::toNativeSeparators(dll)).constData());
+		return;
+	}
+	putManagerAsAdmin(*layout, unpacked, dll);
+}
+
+// Stages the new manager and has it copied in as administrator, which Windows asks the streamer about first.
+void Store::putManagerAsAdmin(const Layout &layout, const std::vector<ZipFile> &zip, const QString &dll)
+{
+	QString why;
+	std::vector<selfupdate::Copy> copies;
+	const auto placed = files::place(layout, QString::fromLatin1(kManagerId), zip, why);
+	if (setup_.staging.isEmpty() || !placed || !selfupdate::stage(*placed, setup_.staging, copies, why)) {
+		managerEntry_.problem = text("Problem.Files").arg(why.isEmpty() ? QStringLiteral("nowhere to stage it") : why);
+		return;
+	}
+	managerEntry_.busy = true;
+	blog(LOG_INFO, "%s %s needs administrator rights: asking Windows", kLog,
+	     utf8(QDir::toNativeSeparators(QFileInfo(dll).absolutePath())).constData());
+	const QString script = selfupdate::script(dll, selfupdate::asideFor(dll, setup_.staging), copies);
+	setup_.runAsAdmin(script, [store = QPointer<Store>(this), dll](int exitCode) {
+		if (store) // the run can outlast the manager when OBS closes meanwhile
+			store->putAsAdminDone(exitCode, dll);
+	});
+}
+
+// The run as administrator has ended: the new manager is in place, or why not.
+void Store::putAsAdminDone(int exitCode, const QString &dll)
+{
+	managerEntry_.busy = false;
+	if (closed_)
+		return;
+	if (exitCode == 0) {
+		managerEntry_.change = Change::Updated;
+		blog(LOG_INFO, "%s the manager updated into %s: restart OBS to finish", kLog,
+		     utf8(QDir::toNativeSeparators(dll)).constData());
+	} else {
+		managerEntry_.problem = text(exitCode < 0 ? "Problem.NotAllowed" : "Problem.Files")
+						.arg(QDir::toNativeSeparators(QFileInfo(dll).absolutePath()));
+		blog(LOG_WARNING, "%s the manager not updated: %s", kLog, utf8(managerEntry_.problem).constData());
+	}
+	emit managerChanged();
+}
+
+// Once a new manager runs: deletes the old one, beside it or in the staging folder, and what was staged.
+void Store::finishManagerUpdate()
+{
+	const QString id = QString::fromLatin1(kManagerId);
+	if (const std::optional<Layout> layout = Layout::holding(loaded(id).dll, id))
+		files::finishUpdate(*layout, id); // where this process may not write, the next update takes it
+	if (!setup_.staging.isEmpty())
+		QDir(setup_.staging).removeRecursively();
+}
+
 void Store::shutDown()
 {
 	closed_ = true;
@@ -351,7 +487,7 @@ void Store::load()
 	listJson_ = remembered.value(QStringLiteral("list")).toString().toUtf8();
 	QStringList problems;
 	if (!listJson_.isEmpty() && !setup_.source.local)
-		readIndex(listJson_, setup_.source, available_, problems);
+		readIndex(listJson_, setup_.source, available_, manager_, problems);
 	if (!available_.empty())
 		list_ = List::Ready;
 }

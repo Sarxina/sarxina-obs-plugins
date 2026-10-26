@@ -9,12 +9,17 @@
 // A plugin OBS has loaded cannot be deleted while OBS runs, but its file can be renamed. Uninstalling one renames
 // <id>.dll to <id>.dll.uninstalled, which OBS does not load, and the rest is deleted when OBS next starts. Updating one
 // renames the running <id>.dll to <id>.dll.old, deleted the same way, and the new one loads when OBS next starts.
+//
+// The manager updates itself the same way, wherever the streamer put it: OBS's own folder (in Program Files, or a
+// portable OBS) or its folder in ProgramData.
 #pragma once
 
 #include "zip.hpp"
 
+#include <QByteArray>
 #include <QString>
 
+#include <optional>
 #include <vector>
 
 namespace sarxina {
@@ -31,9 +36,22 @@ struct Layout {
 
 	// Where this OBS loads plugins from.
 	static Layout forObs();
+	// The layout a plugin's DLL is in, from where it is: nothing if it is in neither.
+	static std::optional<Layout> holding(const QString &dll, const QString &id);
 };
 
 namespace files {
+
+// Where one file of a plugin's zip goes.
+struct Placement {
+	QString target;
+	const QByteArray *contents;
+};
+
+// Where each file of a plugin's zip goes, its DLL last. Nothing, and why, if the zip holds anything but
+// obs-plugins/64bit/<id>.dll and files under data/obs-plugins/<id>/.
+std::optional<std::vector<Placement>> place(const Layout &layout, const QString &id, const std::vector<ZipFile> &zip,
+					    QString &problem);
 
 // Writes a plugin's files from its zip, which has to hold obs-plugins/64bit/<id>.dll and files under
 // data/obs-plugins/<id>/, and nothing else. When `dllInUse`, the <id>.dll there now is the one OBS is running: it is
@@ -55,6 +73,8 @@ bool finishUninstall(const Layout &layout, const QString &id);
 bool finishUpdate(const Layout &layout, const QString &id);
 
 bool exists(const QString &path);
+// Whether this process may add files to the folder.
+bool writable(const QString &folder);
 bool samePath(const QString &a, const QString &b);
 // The version in a DLL's file properties ("1.3.0"), or empty.
 QString version(const QString &dll);

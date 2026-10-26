@@ -1,9 +1,11 @@
-// The Sarxina OBS Plugin Manager as an OBS plugin: its dock, and the four procedures other plugins reach it through
+// The Sarxina OBS Plugin Manager as an OBS plugin: its dock, "Sarxina Source" in the Sources list (source-menu.hpp),
+// and the five procedures other plugins reach it through
 // (sarxina-obs-plugin-manager.h). They go on OBS's global procedure handler when the manager loads, which is before
 // any plugin's obs_module_post_load, so every plugin finds them whatever order OBS loads plugins in.
 #include "manager-dock.hpp"
 #include "manager.hpp"
 #include "self-test.hpp"
+#include "source-menu.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs-module.h>
@@ -29,6 +31,7 @@ namespace {
 
 sarxina::Manager *manager = nullptr;
 sarxina::ManagerDock *dock = nullptr; // while it is in OBS, which owns it
+sarxina::SourceMenu *sourceMenu = nullptr;
 
 void registerPlugin(void *, calldata_t *call)
 {
@@ -56,10 +59,18 @@ void twitchRequest(void *, calldata_t *call)
 		manager->twitchRequest(*request);
 }
 
+void offerSource(void *, calldata_t *call)
+{
+	const auto *offer = static_cast<const sarxina_source_offer *>(calldata_ptr(call, "offer"));
+	calldata_set_bool(call, "accepted", sourceMenu && offer && sourceMenu->offer(*offer));
+}
+
 void frontendEvent(enum obs_frontend_event event, void *)
 {
 	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
 		manager->start();
+		if (!sourceMenu->install(static_cast<QWidget *>(obs_frontend_get_main_window())))
+			blog(LOG_WARNING, "[%s] no Sources list to add \"Sarxina Source\" to", PLUGIN_TITLE);
 		if (qEnvironmentVariableIntValue("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST") != 0) {
 			runSelfTest(qgetenv("SARXINA_OBS_PLUGIN_MANAGER_SELFTEST_PICTURES").constData());
 			checkInObs(*manager);
@@ -87,6 +98,9 @@ bool obs_module_load(void)
 			 nullptr);
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_vts_request(in ptr request)", vtsRequest, nullptr);
 	proc_handler_add(procs, "void sarxina_obs_plugin_manager_twitch_request(in ptr request)", twitchRequest, nullptr);
+	sourceMenu = new sarxina::SourceMenu(*manager);
+	proc_handler_add(procs, "void sarxina_obs_plugin_manager_offer_source(in ptr offer, out bool accepted)",
+			 offerSource, nullptr);
 
 	if (obs_frontend_get_main_window()) {
 		dock = new sarxina::ManagerDock(*manager);
@@ -104,6 +118,8 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+	delete sourceMenu;
+	sourceMenu = nullptr;
 	delete manager;
 	manager = nullptr;
 	blog(LOG_INFO, "[%s] unloaded", PLUGIN_TITLE);

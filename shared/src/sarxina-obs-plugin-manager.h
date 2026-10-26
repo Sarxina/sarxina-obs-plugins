@@ -193,6 +193,30 @@ static inline bool sarxina_obs_plugin_manager_twitch_request(const struct sarxin
 	return procs && proc_handler_call(procs, "sarxina_obs_plugin_manager_twitch_request", &call);
 }
 
+/* ---- sources ---------------------------------------------------------------------------------------------------- */
+
+/* A source a plugin offers in OBS's Sources list: right-clicking the list shows "Sarxina Source" with every offered
+ * source of a plugin that is on, and picking one adds it to the scene being edited, filling the canvas. The source type
+ * must be registered with OBS already (from obs_module_load), and the plugin with the manager. The strings are copied. */
+struct sarxina_source_offer {
+	const char *plugin_id; /* the plugin's id, as in its sarxina_plugin_info */
+	const char *source_id; /* the source type's id, as registered with OBS */
+	const char *name;      /* as listed, and the name a new source gets */
+};
+
+/* Offers the source. False when the manager is not installed, is a version without sources, or refused it (no plugin or
+ * source type of those ids). */
+static inline bool sarxina_obs_plugin_manager_offer_source(const struct sarxina_source_offer *offer)
+{
+	proc_handler_t *procs = obs_get_proc_handler();
+	uint8_t stack[128];
+	calldata_t call;
+	calldata_init_fixed(&call, stack, sizeof(stack));
+	calldata_set_ptr(&call, "offer", (void *)offer);
+	return procs && proc_handler_call(procs, "sarxina_obs_plugin_manager_offer_source", &call) &&
+	       calldata_bool(&call, "accepted");
+}
+
 #ifdef __cplusplus
 }
 #endif
