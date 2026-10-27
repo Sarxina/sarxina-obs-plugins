@@ -44,8 +44,8 @@ endfunction()
 # The engine, the page it runs in, the data and the plugins.
 take(index.html css fonts icon js data img/system)
 
-# The character sheets NPCs are dressed from, as the game's plugin lists them (LOOKS in ChatSaga.js).
-file(READ "${GAME}/js/plugins/ChatSaga.js" _plugin)
+# The character sheets NPCs are dressed from, as the game's plugin lists them (LOOKS in ChatSaga/Identity.js).
+file(READ "${GAME}/js/plugins/ChatSaga/Identity.js" _plugin)
 string(REGEX MATCH "const LOOKS = [[]([^]]*)[]]" _looks "${_plugin}")
 string(REGEX MATCHALL "\"[^\"]+\"" _looks "${CMAKE_MATCH_1}")
 foreach(_look IN LISTS _looks)
