@@ -70,8 +70,17 @@
         return classes[(idHash(id) >>> 16) % classes.length].id;
     };
 
+    /**
+     * What a chatter of this class starts out holding: the weapon named in the class's note in the database, as
+     * <starting weapon: 1>, in an actor's equipment slots; nothing when the note names none.
+     */
+    const startingEquips = classId => {
+        const weaponId = Number(($dataClasses[classId] && $dataClasses[classId].meta["starting weapon"]) || 0);
+        return [$dataWeapons[weaponId] ? weaponId : 0, 0, 0, 0, 0];
+    };
+
     ChatSaga.identity = {
         LONGEST_ID, FACE_PREFIX: "chatsaga:", randomBetween, npcId, npcName, npcDialogue, spokeTime, idHash, lookFor,
-        npcClass
+        npcClass, startingEquips
     };
 })();

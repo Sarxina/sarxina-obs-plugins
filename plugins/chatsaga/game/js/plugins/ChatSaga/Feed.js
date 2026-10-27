@@ -3,7 +3,7 @@
 //=============================================================================
 
 // Follows the feed at http://127.0.0.1:4790/npcs/events, so the town holds whoever the ChatSaga OBS plugin says is in
-// it.
+// it, and shows a chatter's status on stream when they ask for it in chat.
 
 (() => {
     "use strict";
@@ -37,6 +37,7 @@
         on("town", data => becomeTown(data.npcs));
         on("npc", npc => ChatSaga.putNpc(npc.id, feedChange(npc)));
         on("gone", npc => ChatSaga.removeNpc(npc.id));
+        on("status", npc => ChatSaga.status.showAsked(npc.id));
     };
 
     ChatSaga.feed = { followFeed };

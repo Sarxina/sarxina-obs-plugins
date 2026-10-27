@@ -16,6 +16,21 @@ int firstClassFor(const QString &userId)
 	return static_cast<unsigned char>(hash[0]) % kClassCount + 1;
 }
 
+int classNamed(const QString &name)
+{
+	// The game's Classes.json, in order.
+	static const char *const names[kClassCount] = {"swordsman", "sorcerer",       "priest", "knight",
+						       "martialartist", "magicswordsman", "hunter", "bandit"};
+	QString letters;
+	for (const QChar c : name.toLower())
+		if (c.isLetter())
+			letters += c;
+	for (int i = 0; i < kClassCount; ++i)
+		if (letters == QLatin1String(names[i]))
+			return i + 1;
+	return 0;
+}
+
 Profiles::Profiles(const QString &file) : file_(file)
 {
 	load();
@@ -29,6 +44,14 @@ int Profiles::classFor(const QString &userId)
 		save();
 	}
 	return at->second;
+}
+
+void Profiles::setClass(const QString &userId, int classId)
+{
+	if (classId < 1 || classId > kClassCount || classes_[userId] == classId)
+		return;
+	classes_[userId] = classId;
+	save();
 }
 
 // {"profiles": {"<user id>": {"classId": 3}, ...}}; a class out of range is picked again.

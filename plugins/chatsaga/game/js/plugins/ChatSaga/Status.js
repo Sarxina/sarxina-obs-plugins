@@ -3,12 +3,14 @@
 //=============================================================================
 
 // View stats opens a panel on the right half of the screen, over the town as it goes on: the NPC's avatar, name,
-// class and level, HP and MP, and its stats. OK, cancel or a click closes it.
+// class and level, HP and MP, and its stats. OK, cancel or a click closes it. A chatter who asks in chat
+// ("!chatsaga status") gets the same panel for a few seconds while the player plays on, one chatter after another. A
+// party member's panel shows them as they are in the party: their level, HP and EXP so far.
 
 (() => {
     "use strict";
 
-    const { FACE_PREFIX, lookFor } = ChatSaga.identity;
+    const { FACE_PREFIX, lookFor, startingEquips } = ChatSaga.identity;
 
     const PANEL_WIDTH = 840;
     const ROW = 48; // the height of one line of the panel
@@ -19,11 +21,15 @@
     const PANEL_COLOR = "#1c1a2e";
     const BORDER_COLOR = "#e8e4f5";
     const STATS = [2, 3, 4, 5, 6, 7]; // Attack, Defense, M.Attack, M.Defense, Agility, Luck, as the database numbers them
+    const ASKED_FRAMES = 360; // how long a panel a chatter asked for stays up
 
     let statusActorId = 0; // the database slot NPCs are shown in; 0 until it is made
 
-    /** An actor with the NPC's name, class, look and avatar, at level 1, whose stats the panel shows. */
-    const actorFor = npc => {
+    /** The actor whose stats the panel shows: the party member's own, or one made for the NPC. */
+    const actorFor = npc => ChatSaga.party.actorOf(npc.npcId()) || newActorFor(npc);
+
+    /** An actor with the NPC's name, class, look and avatar, at level 1 with its class's starting weapon. */
+    const newActorFor = npc => {
         if (!statusActorId) {
             statusActorId = $dataActors.length;
             $dataActors.push(null);
@@ -33,7 +39,7 @@
             id: statusActorId, name: npc.npcName(), nickname: "", classId: npc.classId(), initialLevel: 1,
             maxLevel: 99, characterName: look.characterName, characterIndex: look.characterIndex,
             faceName: FACE_PREFIX + npc.npcId(), faceIndex: 0, battlerName: "", traits: [],
-            equips: [0, 0, 0, 0, 0], profile: "", note: ""
+            equips: startingEquips(npc.classId()), profile: "", note: ""
         };
         return new Game_Actor(statusActorId);
     };
@@ -54,6 +60,8 @@
             this._actor = null;
             this._openedAt = 0; // the frame it opened on, whose OK press was the one that opened it
             this._closedAt = -1; // the frame it closed on, whose cancel press must not also open the menu
+            this._askedFrames = 0; // while above 0, it shows a chatter who asked, and closes by itself
+            this._asked = []; // NPCs who asked to see their status, waiting their turn
         }
 
         /** A solid panel in place of the window skin, which lets the map show through. */
@@ -77,12 +85,21 @@
             return this.isOpen() && this._npc === npc;
         }
 
-        /** Whether the panel holds the screen: open, opening, or closing on this frame. */
+        /** Whether the panel holds the screen: open, opening, or closing on this frame. A panel a chatter asked for
+         * never does: the player plays on. */
         isHolding() {
-            return this.openness > 0 || this._closedAt === Graphics.frameCount;
+            return (this.openness > 0 && this._askedFrames === 0) || this._closedAt === Graphics.frameCount;
+        }
+
+        /** Lines up the NPC's status to show for a few seconds, after any others waiting. */
+        showAsked(npc) {
+            if (!this._asked.includes(npc) && !(this.isOpen() && this._npc === npc)) {
+                this._asked.push(npc);
+            }
         }
 
         show(npc) {
+            this._askedFrames = 0;
             this._npc = npc;
             this._actor = actorFor(npc);
             this._openedAt = Graphics.frameCount;
@@ -93,9 +110,26 @@
         update() {
             super.update();
             this.updatePanel();
+            this.updateAsked();
             if (this.isOpen() && Graphics.frameCount > this._openedAt) {
                 this.updateRefresh();
-                this.updateClosing();
+                if (this._askedFrames === 0) {
+                    this.updateClosing();
+                }
+            }
+        }
+
+        /** Opens the next asked-for panel once the panel is free, and closes it when its time is up. */
+        updateAsked() {
+            if (this._askedFrames > 0) {
+                if (--this._askedFrames === 0) {
+                    this.close();
+                }
+                return;
+            }
+            if (this.openness === 0 && this._asked.length > 0) {
+                this.show(this._asked.shift());
+                this._askedFrames = ASKED_FRAMES;
             }
         }
 
@@ -228,5 +262,13 @@
     /** Whether the status panel shows this NPC now. */
     const isShowing = npc => !!panel() && panel().isShowing(npc);
 
-    ChatSaga.status = { viewStats, isShowing };
+    /** Shows the status of the NPC with this id for a few seconds, as its chatter asked in chat. */
+    const showAsked = id => {
+        const npc = ChatSaga.town.npcById(id);
+        if (npc && panel()) {
+            panel().showAsked(npc);
+        }
+    };
+
+    ChatSaga.status = { viewStats, isShowing, showAsked };
 })();

@@ -53,6 +53,15 @@ Town::Put Town::put(const QString &id, const NpcChange &change)
 	return Put::Changed;
 }
 
+bool Town::askStatus(const QString &id)
+{
+	if (!find(id))
+		return false;
+	if (statusAsked)
+		statusAsked(id);
+	return true;
+}
+
 bool Town::remove(const QString &id)
 {
 	auto found = std::find_if(npcs_.begin(), npcs_.end(), [&id](const Npc &npc) { return npc.id == id; });

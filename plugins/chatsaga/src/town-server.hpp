@@ -13,7 +13,8 @@
 //   GET    /avatars/<file> a chatter's avatar, from the folder setAvatars() names
 //   DELETE /npcs/<id>     takes it out: 200 {"id", "removed": true}, or 404 with "removed": false
 //   GET    /npcs/events   the feed, as an event stream: "town" with every NPC as GET /npcs gives them, then "npc"
-//                         (the NPC) each time one comes or changes, and "gone" ({"id"}).
+//                         (the NPC) each time one comes or changes, "gone" ({"id"}), and "status" ({"id"}) when a
+//                         chatter asks to see their status on stream.
 //
 // The id is URL-encoded, 1 to 32 characters, and the same in any case. Anything else is {"error": "..."}: 400 for an
 // id or body that cannot be one, 404 for another path, 405 for another method.

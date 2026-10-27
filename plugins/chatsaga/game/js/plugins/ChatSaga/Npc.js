@@ -94,6 +94,12 @@
             this.locate(x, y);
         }
 
+        /** Takes it off the map, while it follows the player in the party; it is put back on a free tile after. */
+        leaveMap() {
+            this._townMapId = 0;
+            this._stepsLeft = 0;
+        }
+
         update() {
             super.update();
             this.updateStroll();
@@ -121,9 +127,10 @@
             }
         }
 
-        /** NPCs never walk into the player. */
+        /** NPCs never walk into the player or the party behind them. */
         isCollidedWithCharacters(x, y) {
-            return super.isCollidedWithCharacters(x, y) || $gamePlayer.pos(x, y);
+            return super.isCollidedWithCharacters(x, y) || $gamePlayer.pos(x, y) ||
+                $gamePlayer.followers().isSomeoneCollided(x, y);
         }
     }
 

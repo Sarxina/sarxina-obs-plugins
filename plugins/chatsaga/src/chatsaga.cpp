@@ -12,6 +12,19 @@ namespace {
 
 constexpr int kStatusEveryMs = 2000; // the settings' line is drawn again at most this often
 
+// The three mercenaries of mercenary mode. Their ids have a colon, which no Twitch login has.
+struct Mercenary {
+	const char *id;
+	const char *name;
+	const char *dialogue;
+	int classId; // in the game's Classes.json
+};
+constexpr Mercenary kMercenaries[] = {
+	{"mercenary:brannoc", "Brannoc", "Coin first. Glory after.", 1},
+	{"mercenary:sela", "Sela", "I patch wounds. Try not to collect them.", 3},
+	{"mercenary:tamsin", "Tamsin", "I set things on fire, for a fee.", 2},
+};
+
 ChatSaga *self(void *data)
 {
 	return static_cast<ChatSaga *>(data);
@@ -120,6 +133,7 @@ void ChatSaga::turnOn()
 	if (managed_ && !testList_)
 		twitch_.start();
 	tick_.start();
+	syncMercenaries();
 	showStatus();
 }
 
@@ -138,12 +152,56 @@ void ChatSaga::chat(const sarxina_chat_message &message)
 	if (closed_ || !enabled_)
 		return;
 	const Chatter chatter{utf8(message.user_name), chatterName(message), utf8(message.user_id)};
+	if (command(chatter, utf8(message.text)))
+		return;
 	if (message.role == SARXINA_ROLE_BROADCASTER) {
 		presence_.setBroadcaster(chatter.login);
 		return;
 	}
 	presence_.heard(chatter, utf8(message.text), static_cast<double>(message.time_ms));
 	sync();
+}
+
+// "!chatsaga status" shows the chatter's status on stream for a moment, with no answer in chat; "!chatsaga changeclass
+// <class>" changes their class. True when the message was one of ChatSaga's commands, which never become dialogue.
+bool ChatSaga::command(const Chatter &chatter, const QString &text)
+{
+	const QStringList words = text.simplified().split(' ', Qt::SkipEmptyParts);
+	if (words.isEmpty() || words[0].compare(QStringLiteral("!chatsaga"), Qt::CaseInsensitive) != 0)
+		return false;
+	const QString what = words.value(1).toLower();
+	if (what == QStringLiteral("status")) {
+		town_.askStatus(npcId(chatter.login));
+	} else if (what == QStringLiteral("changeclass")) {
+		const int classId = classNamed(words.mid(2).join(' '));
+		if (classId) {
+			profiles_.setClass(profileId(chatter.login), classId);
+			sync();
+		}
+	}
+	return true;
+}
+
+void ChatSaga::setMercenaries(bool on)
+{
+	if (on == mercenaries_)
+		return;
+	mercenaries_ = on;
+	blog(LOG_INFO, "[%s] mercenary mode %s", PLUGIN_TITLE, on ? "on" : "off");
+	syncMercenaries();
+}
+
+// The mercenaries are in town exactly while mercenary mode is on.
+void ChatSaga::syncMercenaries()
+{
+	for (const Mercenary &mercenary : kMercenaries) {
+		const QString id = QString::fromUtf8(mercenary.id);
+		if (mercenaries_ && enabled_ && !closed_)
+			town_.put(id, {QString::fromUtf8(mercenary.name), QString::fromUtf8(mercenary.dialogue), 0,
+				       mercenary.classId, QString()});
+		else
+			town_.remove(id);
+	}
 }
 
 void ChatSaga::listChattersForTest(const std::vector<Chatter> &chatters)

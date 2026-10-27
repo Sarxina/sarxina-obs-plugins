@@ -76,12 +76,17 @@ void obs_module_post_load(void)
 	if (obs_frontend_get_main_window())
 		obs_frontend_add_event_callback(frontendEvent, nullptr);
 	plugin->start();
+	sarxina::chatsaga::setMercenaryModeHandler([](bool on) {
+		if (plugin)
+			plugin->setMercenaries(on);
+	});
 	offerTownSource();
 	sarxina::chatsaga::addTestRoute(*plugin);
 }
 
 void obs_module_unload(void)
 {
+	sarxina::chatsaga::setMercenaryModeHandler(nullptr);
 	delete plugin;
 	plugin = nullptr;
 	blog(LOG_INFO, "[%s] unloaded", PLUGIN_TITLE);

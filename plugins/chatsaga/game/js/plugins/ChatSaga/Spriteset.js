@@ -3,7 +3,7 @@
 //=============================================================================
 
 // A sprite for every NPC on the map, kept up to date, and their name tags above everything on the map, lifted where
-// they would cover each other.
+// they would cover each other. Party members following the player carry name tags too.
 
 (() => {
     "use strict";
@@ -50,7 +50,22 @@
         this._townNpcSprites = new Map(); // Game_TownNpc -> Sprite_TownNpc
         this._townNameTags = new Sprite(); // over the whole map, tree crowns and roofs included
         this._baseSprite.addChild(this._townNameTags);
+        this._partySprites = this.nameFollowers();
         this.updateTownNpcs();
+    };
+
+    /** Swaps each follower's sprite for one that carries a name tag, like an NPC's, for the party member it shows. */
+    Spriteset_Map.prototype.nameFollowers = function() {
+        const followers = this._characterSprites.filter(sprite => sprite._character instanceof Game_Follower);
+        return followers.map(sprite => {
+            const named = new Sprite_TownNpc(sprite._character);
+            this._characterSprites[this._characterSprites.indexOf(sprite)] = named;
+            this._tilemap.removeChild(sprite);
+            sprite.destroy();
+            this._tilemap.addChild(named);
+            this._townNameTags.addChild(named.nameTag());
+            return named;
+        });
     };
 
     const _Spriteset_Map_update = Spriteset_Map.prototype.update;
@@ -76,9 +91,14 @@
         }
     };
 
-    /** Puts every name tag where it can be read. */
+    /** Puts every name tag where it can be read; a follower with no party member to show has none. */
     Spriteset_Map.prototype.updateTownNameTags = function() {
-        const drawn = [...this._townNpcSprites.values()].filter(sprite => sprite.isDrawn());
+        const members = this._partySprites.filter(sprite => sprite._character.isVisible() &&
+            sprite._character.npcName());
+        for (const sprite of this._partySprites) {
+            sprite.nameTag().visible = members.includes(sprite) && sprite.nameTag().visible;
+        }
+        const drawn = [...this._townNpcSprites.values(), ...members].filter(sprite => sprite.isDrawn());
         for (const tag of arrangeNameTags(drawn)) {
             tag.sprite.moveNameTagTo(tag.x, tag.y);
         }

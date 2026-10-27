@@ -25,9 +25,11 @@
     Scene_Map.prototype.createButtons = function() {};
 
     // The game opens straight into the town, and follows the feed from then on: an NPC needs the database (its class).
+    // There is no saving: the town lives on stream, and the party is kept in the browser.
     Scene_Boot.prototype.startNormalGame = function() {
         this.checkPlayerLocation();
         DataManager.setupNewGame();
+        $gameSystem.disableSave();
         followFeed();
         SceneManager.goto(Scene_Map);
     };

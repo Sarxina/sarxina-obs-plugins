@@ -7,8 +7,9 @@
 (() => {
     "use strict";
 
-    /** Whether a map is loaded that NPCs can be put on. */
-    const isMapReady = () => !!($gameMap && $gameMap.mapId() > 0 && $dataMap);
+    /** Whether the town is the map loaded now: NPCs live there, the map the game opens on, and wait while the player
+     * is elsewhere. */
+    const isMapReady = () => !!($gameMap && $dataMap && $gameMap.mapId() === $dataSystem.startMapId);
 
     /** Whether the tile is the player's or right beside it, where NPCs would box the player in. */
     const isBesidePlayer = (x, y) => Math.abs(x - $gamePlayer.x) + Math.abs(y - $gamePlayer.y) <= 1;

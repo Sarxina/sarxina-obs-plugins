@@ -55,11 +55,15 @@ public:
 	// Told of every change, for the game.
 	std::function<void(const Npc &)> shown; // an NPC came, or something of it changed
 	std::function<void(const QString &id)> gone;
+	std::function<void(const QString &id)> statusAsked; // a chatter asked to see their status on stream
 
 	// Puts an NPC in town, or changes the one there as asked. `id` is npcId() already.
 	Put put(const QString &id, const NpcChange &change);
 	// Takes the NPC out of town. False if it was not there.
 	bool remove(const QString &id);
+
+	// Shows the NPC's status on stream, if it is in town. False if it is not.
+	bool askStatus(const QString &id);
 
 	const Npc *find(const QString &id) const;
 	// In the order they came.

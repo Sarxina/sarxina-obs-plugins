@@ -43,6 +43,9 @@ public:
 	obs_properties_t *properties() const;
 	void chat(const sarxina_chat_message &message);
 
+	// Mercenary mode, for trying ChatSaga without a chat: three mercenaries live in town while it is on.
+	void setMercenaries(bool on);
+
 	// A stand-in for Twitch's list of chatters, for a demo or a test (test-route.cpp): Twitch is no longer asked.
 	void listChattersForTest(const std::vector<Chatter> &chatters);
 
@@ -60,6 +63,8 @@ private:
 	void turnOn();
 	void turnOff();
 	void sync();
+	void syncMercenaries();
+	bool command(const Chatter &chatter, const QString &text);
 	QString profileId(const QString &login) const;
 	void showStatus();
 	double now() const;
@@ -76,6 +81,7 @@ private:
 	bool enabled_ = false;
 	bool closed_ = false;
 	bool testList_ = false;
+	bool mercenaries_ = false;
 	QString shownStatus_;
 	QTimer tick_;
 	QTimer statusLater_;

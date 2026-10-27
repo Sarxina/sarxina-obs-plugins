@@ -3,7 +3,8 @@
 //=============================================================================
 
 // Puts NPCs in town, changes them and takes them out (ChatSaga.putNpc, ChatSaga.removeNpc and ChatSaga.npcs), finds
-// each a free tile, and keeps them updating and in everyone's way on the map.
+// each a free tile, and keeps them updating and in everyone's way on the map. NPCs in the player's party follow the
+// player instead, and get a tile again once they leave it.
 
 (() => {
     "use strict";
@@ -23,9 +24,13 @@
     /** The NPC standing on this tile of the current map, if any. */
     const npcAt = (x, y) => npcsOnMap().find(npc => npc.pos(x, y));
 
-    /** Whether nothing stands on this tile and it leaves the player room: no event, NPC or player. */
+    /** The NPC with this id, on the map or not. */
+    const npcById = id => npcs.get(id);
+
+    /** Whether nothing stands on this tile and it leaves the player room: no event, NPC, player or follower. */
     const isFreeTile = (x, y) =>
-        $gameMap.eventsXy(x, y).length === 0 && !npcAt(x, y) && !isBesidePlayer(x, y);
+        $gameMap.eventsXy(x, y).length === 0 && !npcAt(x, y) && !isBesidePlayer(x, y) &&
+        !$gamePlayer.followers().isSomeoneCollided(x, y);
 
     /** The free tiles a new NPC may stand on, the ones on screen first if there are any. */
     const freeSpots = () => {
@@ -34,9 +39,10 @@
         return onScreen.length > 0 ? onScreen : free;
     };
 
-    /** Puts every NPC not yet on the current map onto a free tile of it, while there is room. */
+    /** Puts every NPC not yet on the current map, and not off with the party, onto a free tile of it, while there is
+     * room. */
     const placeWaiting = () => {
-        const waiting = [...npcs.values()].filter(npc => !npc.isOnCurrentMap());
+        const waiting = [...npcs.values()].filter(npc => !npc.isOnCurrentMap() && !ChatSaga.party.has(npc.npcId()));
         if (waiting.length === 0 || !isMapReady()) {
             return;
         }
@@ -66,7 +72,11 @@
         }
         const known = npcs.get(id);
         if (known) {
+            const classBefore = known.classId();
             known.change(change);
+            if (known.classId() !== classBefore) {
+                ChatSaga.party.classChanged(known);
+            }
             return { status: 200, ...describe(known), added: false };
         }
         const npc = new Game_TownNpc(id, npcName(change.name, id), npcDialogue(change.dialogue), spokeTime(change.spokeAt),
@@ -109,6 +119,6 @@
         return _Game_CharacterBase_isCollidedWithCharacters.call(this, x, y) || (!!npc && npc !== this);
     };
 
-    ChatSaga.town = { npcsOnMap, npcAt, npcIds, placeWaitingNowAndThen };
+    ChatSaga.town = { npcsOnMap, npcAt, npcById, npcIds, placeWaitingNowAndThen };
     Object.assign(ChatSaga, { putNpc, removeNpc, npcs: listNpcs });
 })();

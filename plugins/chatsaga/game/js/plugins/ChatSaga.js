@@ -36,12 +36,38 @@
  * Talking to an NPC (facing it and pressing OK, or clicking it) opens the
  * message window with its avatar as the face, its name in the name box and
  * its dialogue, wrapped to the window and cut short past four lines, with
- * the choices View stats and Close beside it. View stats opens the status
- * screen for it: avatar, name, class, level, HP and MP, and its stats.
+ * the choices Recruit (while the party has room), View stats and Close
+ * beside it. View stats opens the status screen for it: avatar, name, class,
+ * level, HP and MP, and its stats.
+ *
+ * Every chatter starts with their class's weapon, the one named in the
+ * class's note in the database as <starting weapon: 1>.
+ *
+ * Chatters manage their character with chat commands, handled by the
+ * ChatSaga OBS plugin: "!chatsaga status" shows their status panel on
+ * stream for a few seconds, without stopping the player, and "!chatsaga
+ * changeclass <class>" changes their class, with a line on screen; a party
+ * member keeps their level in the new class.
+ *
+ * Recruit takes the NPC into the party: it leaves the town's crowd and
+ * follows the player, with its name over its head, and "<name> joined the
+ * party!" comes up with its avatar. The party is up to four recruits; the
+ * player, the streamer, leads them but isn't one of them. A member stays
+ * while they are in the stream, lurking or not, and leaves after two hours
+ * out of it; Dismiss in the menu sends one home at once. Either way they
+ * stroll the town again if they are still in the stream. The party is kept
+ * in the browser, so it comes back when the page reloads, minus anyone who
+ * has been away two hours by then.
  * Dialogue written between asterisks, like *lurking*, is shown in italics
  * without them. The NPC turns to the player and stays put until the window
  * closes. An NPC with nothing to say is not talked to. The message window
  * also takes \IT[1] and \IT[0] for italics on and off.
+ *
+ * The town's south road leads to Nalluna Plains, a wide field of meadows,
+ * woods and lakes. Chatters stay in the town; the party follows the player
+ * out. Monsters on the plains fight the party in RPG Maker's battles (an
+ * empty party meets none); a party that loses wakes up back in town, every
+ * member on their feet.
  *
  * An NPC comes in on a free tile that can be walked to from where the player
  * is, on screen if there is room, never under a tree's crown or on the map's
@@ -53,7 +79,8 @@
  * it when its name changes. NPCs are not saved.
  *
  * The game opens straight into the town, without the title screen and
- * without the menu button in the corner (Escape still opens the menu), fills
+ * without the menu button in the corner (Escape still opens the menu, which
+ * has no saving: the town lives on stream), fills
  * the window it is shown in, and keeps going while another window has the
  * focus.
  *
@@ -67,7 +94,8 @@
     "use strict";
 
     const PARTS = [
-        "Identity", "Avatars", "Tiles", "Npc", "Town", "Stroll", "Feed", "Talk", "Status", "Sprites", "Spriteset", "Stage"
+        "Identity", "Avatars", "Tiles", "Npc", "Town", "Stroll", "Feed", "Talk", "Status", "Party", "Battle", "Sprites",
+        "Spriteset", "Stage"
     ];
 
     window.ChatSaga = {};

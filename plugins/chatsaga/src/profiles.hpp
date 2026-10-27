@@ -12,7 +12,11 @@
 
 namespace sarxina::chatsaga {
 
-inline constexpr int kClassCount = 5; // the classes in the game's Classes.json: 1 to kClassCount
+inline constexpr int kClassCount = 8; // the classes in the game's Classes.json: 1 to kClassCount
+
+// The class a chatter names in "!chatsaga changeclass <class>", in any case and with or without spaces: 1 to
+// kClassCount, in the order of the game's Classes.json, or 0 for none.
+int classNamed(const QString &name);
 
 // The class picked for a user id the first time it is seen.
 int firstClassFor(const QString &userId);
@@ -24,6 +28,8 @@ public:
 
 	// The chatter's class: as kept, or picked and kept now.
 	int classFor(const QString &userId);
+	// The chatter chose a class (1 to kClassCount): kept from now on.
+	void setClass(const QString &userId, int classId);
 	size_t size() const { return classes_.size(); }
 
 private:

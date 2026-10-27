@@ -91,6 +91,9 @@ TownServer::TownServer(Town &town) : town_(town), http_([this](const HttpRequest
 {
 	town_.shown = [this](const Npc &npc) { http_.broadcast(QStringLiteral("npc"), toJson(npc)); };
 	town_.gone = [this](const QString &id) { http_.broadcast(QStringLiteral("gone"), {{QStringLiteral("id"), id}}); };
+	town_.statusAsked = [this](const QString &id) {
+		http_.broadcast(QStringLiteral("status"), {{QStringLiteral("id"), id}});
+	};
 }
 
 bool TownServer::start(quint16 port)

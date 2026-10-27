@@ -3,7 +3,7 @@
 //=============================================================================
 
 // The OK button, or a click on the tile in front, talks to the NPC there: its dialogue in the message window, with
-// View stats and Close beside it. The message window takes \IT[1] and \IT[0] for italics on and off.
+// Recruit (while the party has room), View stats and Close beside it. The message window takes \IT[1] and \IT[0] for italics on and off.
 
 (() => {
     "use strict";
@@ -94,11 +94,17 @@
         offerChoices(npc);
     };
 
-    /** The choices beside what the NPC says: View stats opens its status screen; Close, or cancelling, closes. */
+    /**
+     * The choices beside what the NPC says: Recruit, while the party has room, takes it into the party; View stats
+     * opens its status screen; Close, or cancelling, closes.
+     */
     const offerChoices = npc => {
-        $gameMessage.setChoices(["View stats", "Close"], 0, 1);
+        const choices = [...(ChatSaga.party.canRecruit() ? ["Recruit"] : []), "View stats", "Close"];
+        $gameMessage.setChoices(choices, 0, choices.length - 1);
         $gameMessage.setChoiceCallback(choice => {
-            if (choice === 0) {
+            if (choices[choice] === "Recruit") {
+                ChatSaga.party.recruit(npc);
+            } else if (choices[choice] === "View stats") {
                 ChatSaga.status.viewStats(npc);
             }
         });
