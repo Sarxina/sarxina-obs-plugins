@@ -36,9 +36,9 @@
       "description": "Your chat as a JRPG town.",
       "id": "chatsaga",
       "name": "ChatSaga",
-      "sha256": "f3e1eabe60acaf2d5634972eb1341c3c4f2e06d3b784608ea4f6089ebe4d6c29",
-      "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/chatsaga-v1.2.0/chatsaga-1.2.0-windows-x64.zip",
-      "version": "1.2.0"
+      "sha256": "ef50689574ba2810aadf3318dbb5826f4d8fe7876dc784b1d40d2c7637c1ba40",
+      "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/chatsaga-v1.2.1/chatsaga-1.2.1-windows-x64.zip",
+      "version": "1.2.1"
     },
     {
       "description": "A simple plug and play filter chain for your mic.",
