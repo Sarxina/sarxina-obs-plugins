@@ -1,10 +1,10 @@
 #include "town-source.hpp"
+#include "town-server.hpp"
 
 #include <obs-module.h>
-#include <util/platform.h>
-#include <util/util.hpp>
 
 #include <set>
+#include <string>
 
 namespace sarxina::chatsaga {
 
@@ -32,15 +32,15 @@ void setMercenaries(TownSource *town, bool on)
 		mercenaryModeChanged(!withMercenaries.empty());
 }
 
-// The browser source's settings for the game: the page from the plugin's data folder, at the game's size, with its
-// sound kept inside OBS.
+// The browser source's settings for the game: the page as the town serves it (town-server.hpp), at the game's size,
+// with its sound kept inside OBS. Served, not opened as a file: OBS 33's browser keeps a page opened as a file from
+// reading the town's feed on 127.0.0.1, and the game would show nobody.
 obs_data_t *gameSettings()
 {
 	obs_data_t *settings = obs_data_create();
-	BPtr<char> file = obs_module_file("game/index.html"); // relative to OBS's folder in a portable OBS
-	BPtr<char> page = file ? os_get_abs_path_ptr(file) : nullptr;
-	obs_data_set_bool(settings, "is_local_file", true);
-	obs_data_set_string(settings, "local_file", page ? page.Get() : "");
+	const std::string page = "http://127.0.0.1:" + std::to_string(kPort) + "/";
+	obs_data_set_bool(settings, "is_local_file", false);
+	obs_data_set_string(settings, "url", page.c_str());
 	obs_data_set_int(settings, "width", kGameWidth);
 	obs_data_set_int(settings, "height", kGameHeight);
 	obs_data_set_bool(settings, "reroute_audio", true);

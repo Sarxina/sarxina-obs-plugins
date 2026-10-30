@@ -6,7 +6,7 @@ find_package(Qt6 REQUIRED COMPONENTS Network) # the town's local trigger and fee
 sarxina_add_obs_module(
   chatsaga
   TITLE ChatSaga
-  VERSION 1.2.0
+  VERSION 1.2.1
   DESCRIPTION "ChatSaga plugin for OBS Studio"
   SOURCES
     src/avatars.cpp

@@ -9,6 +9,8 @@
 #include <util/platform.h>
 #include <util/util.hpp>
 
+#include <QMetaObject>
+
 OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE(PLUGIN_NAME, "en-US")
 
@@ -76,9 +78,15 @@ void obs_module_post_load(void)
 	if (obs_frontend_get_main_window())
 		obs_frontend_add_event_callback(frontendEvent, nullptr);
 	plugin->start();
+	// A source's settings change on OBS's graphics thread; the plugin, and the town's feed, live on the UI thread.
 	sarxina::chatsaga::setMercenaryModeHandler([](bool on) {
 		if (plugin)
-			plugin->setMercenaries(on);
+			QMetaObject::invokeMethod(
+				plugin, [on] {
+					if (plugin)
+						plugin->setMercenaries(on);
+				},
+				Qt::QueuedConnection);
 	});
 	offerTownSource();
 	sarxina::chatsaga::addTestRoute(*plugin);
