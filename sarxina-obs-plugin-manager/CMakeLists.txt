@@ -11,10 +11,12 @@ if(NOT SARXINA_TWITCH_CLIENT_ID MATCHES "^[A-Za-z0-9]*$")
   message(FATAL_ERROR "SARXINA_TWITCH_CLIENT_ID has to be the Client ID from dev.twitch.tv: only letters and digits")
 endif()
 
+set(_manager_version 1.4.0)
+
 sarxina_add_obs_module(
   sarxina-obs-plugin-manager
   TITLE "Sarxina OBS Plugin Manager"
-  VERSION 1.4.0
+  VERSION ${_manager_version}
   DESCRIPTION "Sarxina OBS Plugin Manager dock for OBS Studio"
   SOURCES
     src/catalog.cpp
@@ -58,3 +60,21 @@ sarxina_add_obs_module(
 foreach(_target IN ITEMS sarxina-obs-plugin-manager sarxina-obs-plugin-manager-selftest)
   target_compile_definitions(${_target} PRIVATE SARXINA_TWITCH_CLIENT_ID="${SARXINA_TWITCH_CLIENT_ID}")
 endforeach()
+
+# The installer, dist/Sarxina-OBS-Plugin-Manager-Setup.exe, made with NSIS 3 from this version's zip in dist/ (the
+# released one, so the installer holds exactly its files). Its name carries no version, so the README's link to
+# releases/latest/download/ always finds it.
+find_program(SARXINA_MAKENSIS makensis PATHS "$ENV{ProgramFiles\(x86\)}/NSIS" "$ENV{ProgramFiles}/NSIS")
+add_custom_target(
+  sarxina-obs-plugin-manager-installer
+  COMMAND "${CMAKE_COMMAND}"
+          "-DZIP=${CMAKE_SOURCE_DIR}/dist/sarxina-obs-plugin-manager-${_manager_version}-windows-x64.zip"
+          "-DVERSION=${_manager_version}"
+          "-DSTAGE=${CMAKE_BINARY_DIR}/installer/sarxina-obs-plugin-manager"
+          "-DNSI=${CMAKE_CURRENT_SOURCE_DIR}/installer/installer.nsi"
+          "-DMAKENSIS=${SARXINA_MAKENSIS}"
+          "-DOUTFILE=${CMAKE_SOURCE_DIR}/dist/Sarxina-OBS-Plugin-Manager-Setup.exe"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/installer/installer.cmake"
+  COMMENT "Building the manager's installer into dist/"
+  VERBATIM
+)

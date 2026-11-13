@@ -63,6 +63,14 @@ What each one does:
 4. **Package.** Produces `dist\<plugin>-<version>-windows-x64.zip` for each of the seven, the files to attach to a release. `dist\` is not committed. The example plugin is never packaged.
 5. **List.** Packages every plugin and the manager again and writes `plugins.json`, the list the manager installs from: each plugin's name, the `Description` from its strings (one short line saying what the plugin is), its version, the address its zip will have on the releases (tag `<plugin>-v<version>`) and the zip's SHA-256, and under `manager` the manager's own version, address and SHA-256. Attach exactly those zips to their releases first, then commit `plugins.json` to main: the manager installs nothing whose SHA-256 differs. The plugins in it are listed at the bottom of the top `CMakeLists.txt`. Packaging again gives a zip with another SHA-256, so for plugins that are not being released, keep their entries as they are on main.
 
+### The manager's installer
+
+```powershell
+& $cmake --build --preset windows-x64 --target sarxina-obs-plugin-manager-installer
+```
+
+makes `dist\Sarxina-OBS-Plugin-Manager-Setup.exe` from the manager's zip in `dist\`, the released one, so that it holds exactly the release's files (`gh release download sarxina-obs-plugin-manager-v<version> -D dist` gets it). It needs [NSIS 3](https://nsis.sourceforge.io) (`winget install NSIS.NSIS`). The installer, `sarxina-obs-plugin-manager\installer\installer.nsi`, checks that OBS Studio is installed, 32.2 or newer and closed, takes away a manager extracted into the OBS folder the old way, puts the manager in `C:\ProgramData\obs-studio\plugins\sarxina-obs-plugin-manager\` and adds it to Windows' installed apps; uninstalling takes away only the manager, and leaves the plugins it installed and its settings. It is not code-signed, so Windows shows "Windows protected your PC" first. Attach it to every manager release under the same name, so that the README's link to `releases/latest/download/` finds it.
+
 Versions used: Build Tools for Visual Studio 2022 17.13.6 (MSVC 19.43), CMake 3.30.5, Windows SDK 10.0.22621.0, OBS Studio 32.2.2 sources, obs-deps 2026-07-15, Qt 6.11.1.
 
 ### The Twitch app

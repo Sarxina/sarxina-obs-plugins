@@ -7,11 +7,13 @@ Windows only, OBS Studio 32.2 or newer.
 ## Installing
 
 1. Close OBS.
-2. Download the manager's zip from [the latest release](../../releases/latest) and extract it into your OBS folder (usually `C:\Program Files\obs-studio`).
+2. Download [**Sarxina-OBS-Plugin-Manager-Setup.exe**](../../releases/latest/download/Sarxina-OBS-Plugin-Manager-Setup.exe) and run it. If Windows says "Windows protected your PC", click **More info**, then **Run anyway** (the installer isn't code-signed yet).
 3. Open OBS and tick **Sarxina OBS Plugin Manager** in the **Docks** menu.
 4. In the dock, pick a plugin from the list, hit **Install**, then restart OBS. **Uninstall** and **Update** work the same way.
 
-When a new version of the manager itself is out, an up arrow shows at the top of its dock. Click it and restart OBS. If OBS is in Program Files, Windows asks first whether the manager may change files there.
+The installer checks that your OBS is 32.2 or newer and puts the manager where OBS loads plugins from. To remove the manager, uninstall it from Windows' **Installed apps** like any other program. For a portable OBS, download the manager's zip from [the latest release](../../releases/latest) instead and extract it into your OBS folder.
+
+When a new version of the manager itself is out, an up arrow shows at the top of its dock. Click it and restart OBS. Windows may ask first whether the manager may change its files.
 
 Click ⚙️ next to a plugin for its settings.
 
