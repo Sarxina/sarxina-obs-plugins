@@ -47,6 +47,22 @@
       "sha256": "034ca733e4612fa4a74013d07d97d0d6bda764bd849192b1cf15f78b8f2b5c70",
       "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/voicegoodifier-v1.0.0/voicegoodifier-1.0.0-windows-x64.zip",
       "version": "1.0.0"
+    },
+    {
+      "description": "Stop talking for too long and a countdown closes your game.",
+      "id": "keeptalking",
+      "name": "KeepTalking",
+      "sha256": "3ff23eb08280282c0e09e3eae4e68592ef2c74fe7987801ae810165b2b8f7a12",
+      "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/keeptalking-v1.0.0/keeptalking-1.0.0-windows-x64.zip",
+      "version": "1.0.0"
+    },
+    {
+      "description": "A giant wheel of topics that chat spins with channel points.",
+      "id": "wheelofyap",
+      "name": "WheelOfYap",
+      "sha256": "bab4c4127a787361ecbd24afd50c4ad0adfc5ce8a8e1abacf54a7984d6c518e3",
+      "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/wheelofyap-v1.0.0/wheelofyap-1.0.0-windows-x64.zip",
+      "version": "1.0.0"
     }
   ],
   "manager": {
