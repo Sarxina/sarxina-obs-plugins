@@ -54,11 +54,6 @@ QByteArray utf8(const QString &text)
 	return text.toUtf8();
 }
 
-QString text(const char *key)
-{
-	return QString::fromUtf8(obs_module_text(key));
-}
-
 // The chatter a cooldown is kept for: their id, else their account name.
 std::string chatterKey(const sarxina_chat_message &message)
 {
@@ -81,13 +76,19 @@ QString why(int status, const QJsonObject &answer)
 	return status ? QStringLiteral("Twitch said %1").arg(status) : QStringLiteral("Twitch could not be reached");
 }
 
-// The settings show the command field or the reward fields, whichever the trigger needs.
-bool triggerPicked(obs_properties_t *properties, obs_property_t *, obs_data_t *settings)
+std::string keyed(const std::string &key, const char *name)
 {
-	const bool reward = std::strcmp(obs_data_get_string(settings, "trigger"), "reward") == 0;
-	obs_property_set_visible(obs_properties_get(properties, "command"), !reward);
-	for (const char *field : {"reward", "reward_create", "reward_help", "reward_name"})
-		if (obs_property_t *property = obs_properties_get(properties, field))
+	return key + name;
+}
+
+// The settings show the command field or the reward fields, whichever the trigger needs.
+bool triggerPicked(void *data, obs_properties_t *properties, obs_property_t *, obs_data_t *settings)
+{
+	const std::string &key = static_cast<ChatTrigger *>(data)->key;
+	const bool reward = std::strcmp(obs_data_get_string(settings, keyed(key, "trigger").c_str()), "reward") == 0;
+	obs_property_set_visible(obs_properties_get(properties, keyed(key, "command").c_str()), !reward);
+	for (const char *field : {"reward", "reward_create", "reward_help", "reward_name", "reward_cost"})
+		if (obs_property_t *property = obs_properties_get(properties, keyed(key, field).c_str()))
 			obs_property_set_visible(property, reward);
 	return true;
 }
@@ -145,6 +146,17 @@ bool sendToTwitch(const char *method, const QString &path, const QByteArray &bod
 }
 
 // ---- the trigger ----------------------------------------------------------------------------------------------------
+
+QString ChatTrigger::text(const char *name) const
+{
+	if (!strings.empty()) {
+		const std::string own = strings + name;
+		const char *words = obs_module_text(own.c_str());
+		if (words && own != words) // obs_module_text gives the key back when there is no such string
+			return QString::fromUtf8(words);
+	}
+	return QString::fromUtf8(obs_module_text(name));
+}
 
 ChatTrigger::ChatTrigger(const std::string &command, TriggerSettings::Trigger trigger, bool cooldownPerChatter)
 	: perChatter_(cooldownPerChatter)
@@ -328,10 +340,10 @@ void ChatTrigger::listRewards(bool now)
 			listing_ = false;
 	});
 	if (!listing_) { // the manager is not installed, or is a version without Twitch's API
-		const bool news = listed_ || status_ != text("Reward.NoManager");
+		const bool news = listed_ || status_ != this->text("Reward.NoManager");
 		listed_ = false;
 		channel_.clear();
-		status_ = text("Reward.NoManager");
+		status_ = this->text("Reward.NoManager");
 		if (news)
 			tell();
 	}
@@ -339,11 +351,11 @@ void ChatTrigger::listRewards(bool now)
 
 void ChatTrigger::createReward()
 {
-	const QString title = plainText(text("Reward.Title"), kLongestRewardName);
+	const QString title = plainText(this->text("Reward.Title"), kLongestRewardName);
 	QJsonObject reward{
 		{QStringLiteral("title"), title},
 		{QStringLiteral("cost"), newRewardCost},
-		{QStringLiteral("prompt"), plainText(text("Reward.Prompt"), kLongestPrompt)},
+		{QStringLiteral("prompt"), plainText(this->text("Reward.Prompt"), kLongestPrompt)},
 		{QStringLiteral("is_enabled"), true},
 		{QStringLiteral("is_user_input_required"), true}, // only a reward that asks for text comes through chat
 		{QStringLiteral("is_global_cooldown_enabled"), true},
@@ -367,12 +379,12 @@ void ChatTrigger::createReward()
 					      picked.rewardName = title;
 				      setSettings(picked);
 				      channel_.push_back({id, title, true, true});
-				      status_ = text("Reward.Created").arg(title);
+				      status_ = this->text("Reward.Created").arg(title);
 				      tell();
 				      listRewards(true);
 			      });
 	if (!sent) {
-		status_ = text("Reward.NoManager");
+		status_ = this->text("Reward.NoManager");
 		tell();
 	}
 }
@@ -412,24 +424,29 @@ void ChatTrigger::fulfil(const Heard &heard)
 
 void addTriggerProperties(obs_properties_t *properties, ChatTrigger &trigger, bool rewardName)
 {
-	obs_property_t *pick = obs_properties_add_list(properties, "trigger", obs_module_text("Trigger"),
-						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(pick, obs_module_text("Trigger.Command"), "command");
-	obs_property_list_add_string(pick, obs_module_text("Trigger.Reward"), "reward");
-	obs_property_set_modified_callback(pick, triggerPicked);
+	const std::string &key = trigger.key;
+	const auto name = [&key](const char *field) { return keyed(key, field); };
+	const auto words = [&trigger](const char *string) { return utf8(trigger.text(string)); };
 
-	obs_properties_add_text(properties, "command", obs_module_text("Command"), OBS_TEXT_DEFAULT);
+	obs_property_t *pick = obs_properties_add_list(properties, name("trigger").c_str(), words("Trigger").constData(),
+						       OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(pick, words("Trigger.Command").constData(), "command");
+	obs_property_list_add_string(pick, words("Trigger.Reward").constData(), "reward");
+	obs_property_set_modified_callback2(pick, triggerPicked, &trigger);
+
+	obs_properties_add_text(properties, name("command").c_str(), words("Command").constData(), OBS_TEXT_DEFAULT);
 
 	// The channel's rewards as Twitch lists them; without the manager's Twitch connection, the ones redeemed in chat
 	// since OBS started. And the one picked before, which may be neither.
-	obs_property_t *reward = obs_properties_add_list(properties, "reward", obs_module_text("Reward"),
+	obs_property_t *reward = obs_properties_add_list(properties, name("reward").c_str(), words("Reward").constData(),
 							 OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
-	obs_property_list_add_string(reward, obs_module_text("Reward.None"), "");
+	obs_property_list_add_string(reward, words("Reward.None").constData(), "");
 	const TriggerSettings &now = trigger.settings();
 	std::vector<std::pair<std::string, QString>> offered;
 	if (trigger.listed()) {
 		for (const ChannelReward &r : trigger.channelRewards())
-			offered.emplace_back(r.id, r.asksForText ? r.title : r.title + QLatin1Char(' ') + text("Reward.NoText"));
+			offered.emplace_back(r.id, r.asksForText ? r.title
+							       : r.title + QLatin1Char(' ') + trigger.text("Reward.NoText"));
 	} else {
 		for (const ChatTrigger::Reward &r : trigger.rewards())
 			offered.emplace_back(r.id, r.label);
@@ -441,44 +458,54 @@ void addTriggerProperties(obs_properties_t *properties, ChatTrigger &trigger, bo
 		obs_property_list_add_string(reward, utf8(now.rewardLabel).constData(), now.rewardId.c_str());
 	for (const auto &[id, label] : offered)
 		obs_property_list_add_string(reward, utf8(label).constData(), id.c_str());
-	obs_properties_add_button2(properties, "reward_create", obs_module_text("Reward.Create"), createPressed, &trigger);
-	const QString help = trigger.status().isEmpty() ? text("Reward.Help") : trigger.status();
-	obs_properties_add_text(properties, "reward_help", utf8(help).constData(), OBS_TEXT_INFO);
+	if (trigger.costInSettings) {
+		obs_property_t *cost = obs_properties_add_int(properties, name("reward_cost").c_str(),
+							      words("RewardCost").constData(), 1, 1000000, 50);
+		obs_property_int_set_suffix(cost, utf8(QLatin1Char(' ') + trigger.text("RewardCost.Unit")).constData());
+	}
+	obs_properties_add_button2(properties, name("reward_create").c_str(), words("Reward.Create").constData(),
+				   createPressed, &trigger);
+	const QString help = trigger.status().isEmpty() ? trigger.text("Reward.Help") : trigger.status();
+	obs_properties_add_text(properties, name("reward_help").c_str(), utf8(help).constData(), OBS_TEXT_INFO);
 	if (rewardName)
-		obs_properties_add_text(properties, "reward_name", obs_module_text("RewardName"), OBS_TEXT_DEFAULT);
+		obs_properties_add_text(properties, name("reward_name").c_str(), words("RewardName").constData(),
+					OBS_TEXT_DEFAULT);
 
-	obs_property_t *cooldown =
-		obs_properties_add_int(properties, "cooldown", obs_module_text("Cooldown"), kLeastCooldown, kMostCooldown, 1);
+	obs_property_t *cooldown = obs_properties_add_int(properties, name("cooldown").c_str(), words("Cooldown").constData(),
+							  kLeastCooldown, kMostCooldown, 1);
 	obs_property_int_set_suffix(cooldown, " s");
-	obs_property_set_long_description(cooldown, obs_module_text("Cooldown.Help"));
+	obs_property_set_long_description(cooldown, words("Cooldown.Help").constData());
 
 	trigger.listRewards();
 }
 
-void triggerToSettings(obs_data_t *settings, const TriggerSettings &now)
+void triggerToSettings(obs_data_t *settings, const TriggerSettings &now, const std::string &key)
 {
-	obs_data_set_string(settings, "trigger", now.trigger == TriggerSettings::Trigger::Reward ? "reward" : "command");
-	obs_data_set_string(settings, "command", ("!" + now.command).c_str());
-	obs_data_set_string(settings, "reward", now.rewardId.c_str());
-	obs_data_set_string(settings, "reward_name", utf8(now.rewardName).constData());
-	obs_data_set_int(settings, "cooldown", now.cooldownSeconds);
+	obs_data_set_string(settings, keyed(key, "trigger").c_str(),
+			    now.trigger == TriggerSettings::Trigger::Reward ? "reward" : "command");
+	obs_data_set_string(settings, keyed(key, "command").c_str(), ("!" + now.command).c_str());
+	obs_data_set_string(settings, keyed(key, "reward").c_str(), now.rewardId.c_str());
+	obs_data_set_string(settings, keyed(key, "reward_name").c_str(), utf8(now.rewardName).constData());
+	obs_data_set_int(settings, keyed(key, "cooldown").c_str(), now.cooldownSeconds);
 }
 
 TriggerSettings triggerFromSettings(obs_data_t *settings, const ChatTrigger &trigger, bool &rewrite)
 {
+	const std::string &key = trigger.key;
 	TriggerSettings changed = trigger.settings();
-	changed.trigger = std::strcmp(obs_data_get_string(settings, "trigger"), "reward") == 0
+	changed.trigger = std::strcmp(obs_data_get_string(settings, keyed(key, "trigger").c_str()), "reward") == 0
 				  ? TriggerSettings::Trigger::Reward
 				  : TriggerSettings::Trigger::Command;
 
-	const std::string typed = obs_data_get_string(settings, "command");
+	const std::string typed = obs_data_get_string(settings, keyed(key, "command").c_str());
 	const std::string command = commandName(typed);
 	if (!command.empty())
 		changed.command = command;
 	rewrite = typed != "!" + changed.command;
 
-	changed.rewardName = plainText(utf8(obs_data_get_string(settings, "reward_name")), kLongestRewardName);
-	const std::string reward = obs_data_get_string(settings, "reward");
+	changed.rewardName =
+		plainText(utf8(obs_data_get_string(settings, keyed(key, "reward_name").c_str())), kLongestRewardName);
+	const std::string reward = obs_data_get_string(settings, keyed(key, "reward").c_str());
 	if (reward != changed.rewardId) {
 		changed.rewardId = reward;
 		changed.rewardLabel.clear();
@@ -495,40 +522,44 @@ TriggerSettings triggerFromSettings(obs_data_t *settings, const ChatTrigger &tri
 			if (r.id == reward && changed.rewardLabel.isEmpty())
 				changed.rewardLabel = r.label;
 	}
-	changed.cooldownSeconds =
-		std::clamp(static_cast<int>(obs_data_get_int(settings, "cooldown")), kLeastCooldown, kMostCooldown);
+	changed.cooldownSeconds = std::clamp(static_cast<int>(obs_data_get_int(settings, keyed(key, "cooldown").c_str())),
+					     kLeastCooldown, kMostCooldown);
 	return changed;
 }
 
-void saveTrigger(obs_data_t *config, const TriggerSettings &now)
+void saveTrigger(obs_data_t *config, const TriggerSettings &now, const std::string &key)
 {
-	obs_data_set_string(config, "trigger", now.trigger == TriggerSettings::Trigger::Reward ? "reward" : "command");
-	obs_data_set_string(config, "command", now.command.c_str());
-	obs_data_set_string(config, "reward_id", now.rewardId.c_str());
-	obs_data_set_string(config, "reward_label", utf8(now.rewardLabel).constData());
-	obs_data_set_string(config, "reward_name", utf8(now.rewardName).constData());
-	obs_data_set_int(config, "cooldown", now.cooldownSeconds);
+	obs_data_set_string(config, keyed(key, "trigger").c_str(),
+			    now.trigger == TriggerSettings::Trigger::Reward ? "reward" : "command");
+	obs_data_set_string(config, keyed(key, "command").c_str(), now.command.c_str());
+	obs_data_set_string(config, keyed(key, "reward_id").c_str(), now.rewardId.c_str());
+	obs_data_set_string(config, keyed(key, "reward_label").c_str(), utf8(now.rewardLabel).constData());
+	obs_data_set_string(config, keyed(key, "reward_name").c_str(), utf8(now.rewardName).constData());
+	obs_data_set_int(config, keyed(key, "cooldown").c_str(), now.cooldownSeconds);
 }
 
-TriggerSettings loadTrigger(obs_data_t *config, const TriggerSettings &defaults)
+TriggerSettings loadTrigger(obs_data_t *config, const TriggerSettings &defaults, const std::string &key)
 {
 	TriggerSettings settings = defaults;
 	if (!config)
 		return settings;
-	obs_data_set_default_string(config, "trigger",
+	const auto name = [&key](const char *field) { return keyed(key, field); };
+	obs_data_set_default_string(config, name("trigger").c_str(),
 				    defaults.trigger == TriggerSettings::Trigger::Reward ? "reward" : "command");
-	obs_data_set_default_string(config, "command", defaults.command.c_str());
-	obs_data_set_default_int(config, "cooldown", defaults.cooldownSeconds);
-	settings.trigger = std::strcmp(obs_data_get_string(config, "trigger"), "reward") == 0
+	obs_data_set_default_string(config, name("command").c_str(), defaults.command.c_str());
+	obs_data_set_default_int(config, name("cooldown").c_str(), defaults.cooldownSeconds);
+	settings.trigger = std::strcmp(obs_data_get_string(config, name("trigger").c_str()), "reward") == 0
 				   ? TriggerSettings::Trigger::Reward
 				   : TriggerSettings::Trigger::Command;
-	if (const std::string command = commandName(obs_data_get_string(config, "command")); !command.empty())
+	if (const std::string command = commandName(obs_data_get_string(config, name("command").c_str()));
+	    !command.empty())
 		settings.command = command;
-	settings.rewardId = obs_data_get_string(config, "reward_id");
-	settings.rewardLabel = utf8(obs_data_get_string(config, "reward_label"));
-	settings.rewardName = plainText(utf8(obs_data_get_string(config, "reward_name")), kLongestRewardName);
-	settings.cooldownSeconds =
-		std::clamp(static_cast<int>(obs_data_get_int(config, "cooldown")), kLeastCooldown, kMostCooldown);
+	settings.rewardId = obs_data_get_string(config, name("reward_id").c_str());
+	settings.rewardLabel = utf8(obs_data_get_string(config, name("reward_label").c_str()));
+	settings.rewardName =
+		plainText(utf8(obs_data_get_string(config, name("reward_name").c_str())), kLongestRewardName);
+	settings.cooldownSeconds = std::clamp(static_cast<int>(obs_data_get_int(config, name("cooldown").c_str())),
+					      kLeastCooldown, kMostCooldown);
 	return settings;
 }
 

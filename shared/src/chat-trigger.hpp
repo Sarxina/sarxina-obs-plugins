@@ -17,6 +17,9 @@
 // properties below; their words are each plugin's own strings: Trigger, Trigger.Command, Trigger.Reward, Command,
 // Reward, Reward.None, Reward.Help, Reward.NoText, Reward.Create, Reward.Created, Reward.NoManager, Reward.Title,
 // Reward.Prompt, Cooldown, Cooldown.Help, and RewardName for a plugin that shows the reward's name.
+//
+// A plugin with more than one trigger (WheelOfYap: a spin and a forced topic) gives each a `key`, which goes in front
+// of its settings' keys, and a `strings` prefix: "Spin." looks up "Spin.Reward.Title" first, then "Reward.Title".
 #pragma once
 
 #include "sarxina-obs-plugin-manager.h"
@@ -116,6 +119,14 @@ public:
 	std::function<void()> changed;
 	// The cost of a reward the button makes; its title and prompt are the plugin's Reward.Title and Reward.Prompt.
 	int newRewardCost = 300;
+	// For a plugin with more than one trigger: in front of the settings' keys ("spin_"), and of the strings ("Spin.").
+	std::string key;
+	std::string strings;
+	// A field for the cost of the reward the button makes (key "reward_cost", strings RewardCost and
+	// RewardCost.Unit); the plugin keeps its value in newRewardCost.
+	bool costInSettings = false;
+	// The plugin's string `name`, with the `strings` prefix if the plugin has one for it.
+	QString text(const char *name) const;
 
 	// Asks Twitch for the channel's rewards, unless it was asked a moment ago.
 	void listRewards(bool now = false);
@@ -160,13 +171,13 @@ private:
 // the channel's rewards again, for the next time the settings are drawn.
 void addTriggerProperties(obs_properties_t *properties, ChatTrigger &trigger, bool rewardName);
 // The values the fields show.
-void triggerToSettings(obs_data_t *settings, const TriggerSettings &now);
+void triggerToSettings(obs_data_t *settings, const TriggerSettings &now, const std::string &key = {});
 // The fields as the streamer left them. A command that cannot be one keeps the one before, and `rewrite` says the
 // command field should show what the command is now.
 TriggerSettings triggerFromSettings(obs_data_t *settings, const ChatTrigger &trigger, bool &rewrite);
 
 // In the plugin's own config.json.
-void saveTrigger(obs_data_t *config, const TriggerSettings &now);
-TriggerSettings loadTrigger(obs_data_t *config, const TriggerSettings &defaults);
+void saveTrigger(obs_data_t *config, const TriggerSettings &now, const std::string &key = {});
+TriggerSettings loadTrigger(obs_data_t *config, const TriggerSettings &defaults, const std::string &key = {});
 
 } // namespace sarxina

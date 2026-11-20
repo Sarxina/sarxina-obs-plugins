@@ -19,6 +19,8 @@ add_subdirectory(plugins/jobapplication)
 add_subdirectory(plugins/chatsaga)
 add_subdirectory(sarxina-obs-plugin-manager)
 add_subdirectory(plugins/voicegoodifier)
+add_subdirectory(plugins/wheelofyap)
+add_subdirectory(plugins/keeptalking)
 
 # The smallest plugin the Sarxina OBS Plugin Manager can run, for anyone making their own. Never released.
 add_subdirectory(examples/example-plugin)
@@ -35,4 +37,6 @@ sarxina_add_plugins_index(
   jobapplication
   chatsaga
   voicegoodifier
+  keeptalking
+  wheelofyap
 )

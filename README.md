@@ -45,3 +45,5 @@ PlinkoToggle and JobApplication move your model through the manager.
 | **JobApplication** | VTube Studio item | A job application on your model that chat fills out, one line of work experience per redeem. |
 | **ChatSaga** | Source | Your chat as a JRPG town: everyone in chat is an NPC with a class, stats and their last message. |
 | **VoiceGoodifier** | Audio filters | A simple plug and play filter chain for your mic: a noise gate, a drag-the-curve EQ and a hard limiter. |
+| **KeepTalking** | Source | Go quiet too long and a countdown shows on stream. At zero, your game closes. |
+| **WheelOfYap** | Source | A giant wheel of topics. Chat spins it with a channel point redeem, or pays more to force their own topic onto it. |
