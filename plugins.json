@@ -52,9 +52,9 @@
       "description": "Stop talking for too long and a countdown closes your game.",
       "id": "keeptalking",
       "name": "KeepTalking",
-      "sha256": "3ff23eb08280282c0e09e3eae4e68592ef2c74fe7987801ae810165b2b8f7a12",
-      "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/keeptalking-v1.0.0/keeptalking-1.0.0-windows-x64.zip",
-      "version": "1.0.0"
+      "sha256": "4050efaf4eb25db6fdad05cdc42eb07145af4abc66c92ac971cd12b115b3fcb2",
+      "url": "https://github.com/Sarxina/sarxina-obs-plugins/releases/download/keeptalking-v1.1.0/keeptalking-1.1.0-windows-x64.zip",
+      "version": "1.1.0"
     },
     {
       "description": "A giant wheel of topics that chat spins with channel points.",
