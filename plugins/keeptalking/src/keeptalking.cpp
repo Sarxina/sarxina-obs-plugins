@@ -3,6 +3,7 @@
 #include "countdown-picture.hpp"
 #include "countdown-source.hpp"
 #include "processes.hpp"
+#include "word-count-source.hpp"
 #include "sarxina-obs-plugin-manager.h"
 
 #include <obs-module.h>
@@ -12,6 +13,8 @@
 #include <QApplication>
 #include <QFormLayout>
 #include <QLabel>
+#include <QLocale>
+#include <QNetworkAccessManager>
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +26,7 @@ namespace {
 constexpr int kTickMs = 50;    // how often the countdown is stepped and the level shown
 constexpr int kSlowMs = 1000;  // how often the game and the mic are looked for
 constexpr float kSilentDb = -90; // under this, the level reads "silent"
+constexpr double kShortestSent = 300; // streams shorter than this are not sent to the leaderboard (nor taken)
 
 KeepTalking *self(void *data)
 {
@@ -56,9 +60,41 @@ QString levelText(float db)
 	return QStringLiteral("%1 dB").arg(static_cast<int>(std::lround(db)));
 }
 
+long long wordsFrom(uint64_t syllables)
+{
+	return std::llround(static_cast<double>(syllables) / WordCounter::kSyllablesPerWord);
+}
+
+QString wordsText(long long words)
+{
+	return QLocale(QLocale::English).toString(words);
+}
+
+// A text field in the manager's settings, found by the label beside it, made read-only.
+QLineEdit *settingsField(const char *labelKey)
+{
+	const QString label = QString::fromUtf8(obs_module_text(labelKey));
+	for (QWidget *widget : QApplication::allWidgets()) {
+		auto *text = qobject_cast<QLabel *>(widget);
+		if (!text || text->text() != label || !text->parentWidget())
+			continue;
+		auto *form = qobject_cast<QFormLayout *>(text->parentWidget()->layout());
+		int row = -1;
+		QFormLayout::ItemRole role;
+		if (!form || (form->getWidgetPosition(text, &row, &role), row < 0))
+			continue;
+		QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole);
+		if (auto *edit = field ? qobject_cast<QLineEdit *>(field->widget()) : nullptr) {
+			edit->setReadOnly(true);
+			return edit;
+		}
+	}
+	return nullptr;
+}
+
 } // namespace
 
-KeepTalking::KeepTalking()
+KeepTalking::KeepTalking() : counter_(obs_get_audio() ? audio_output_get_sample_rate(obs_get_audio()) : 48000)
 {
 	load();
 	meter_ = obs_volmeter_create(OBS_FADER_LOG);
@@ -94,9 +130,11 @@ void KeepTalking::shutDown()
 	if (closed_)
 		return;
 	closed_ = true;
+	counting_ = false;
 	tick_.stop();
 	slow_.stop();
 	showNumber(-1);
+	detachMic();
 	if (meter_) {
 		obs_volmeter_remove_callback(meter_, levelArrived, this);
 		obs_volmeter_detach_source(meter_);
@@ -110,6 +148,7 @@ void KeepTalking::setEnabled(bool enabled)
 {
 	managed_ = true; // only the manager calls this
 	enabled_ = enabled && !closed_;
+	counting_ = enabled_ && streaming_;
 	if (enabled_) {
 		tick_.start();
 		slow_.start();
@@ -188,7 +227,12 @@ obs_properties_t *KeepTalking::properties()
 	obs_properties_add_text(properties, "level", obs_module_text("Level"), OBS_TEXT_DEFAULT);
 	obs_property_t *quiet = obs_properties_add_int(properties, "seconds", obs_module_text("Seconds"), 1, 120, 1);
 	obs_property_int_set_suffix(quiet, " s");
+	obs_properties_add_text(properties, "words", obs_module_text("Words"), OBS_TEXT_DEFAULT);
+	obs_properties_add_bool(properties, "leaderboard", obs_module_text("Leaderboard"));
+	obs_properties_add_text(properties, "leaderboard_result", obs_module_text("Leaderboard.Result"), OBS_TEXT_DEFAULT);
 	levelField_.clear(); // drawn anew; found again on the next tick
+	wordsField_.clear();
+	resultField_.clear();
 	return properties;
 }
 
@@ -200,6 +244,11 @@ void KeepTalking::getSettings(obs_data_t *settings) const
 	obs_data_set_double(settings, "threshold", thresholdDb_);
 	obs_data_set_string(settings, "level", levelText(levelDb_).toUtf8().constData());
 	obs_data_set_int(settings, "seconds", seconds_);
+	obs_data_set_string(settings, "words", wordsText(words()).toUtf8().constData());
+	obs_data_set_bool(settings, "leaderboard", leaderboard_);
+	std::lock_guard<std::mutex> hold(statusLock_);
+	const QString result = result_.line.isEmpty() ? QString::fromUtf8(obs_module_text("Leaderboard.None")) : result_.line;
+	obs_data_set_string(settings, "leaderboard_result", result.toUtf8().constData());
 }
 
 void KeepTalking::update(obs_data_t *settings)
@@ -214,6 +263,10 @@ void KeepTalking::update(obs_data_t *settings)
 	thresholdDb_ = std::clamp(obs_data_get_double(settings, "threshold"), -90.0, 0.0);
 	threshold_ = static_cast<float>(thresholdDb_);
 	seconds_ = static_cast<int>(std::clamp<long long>(obs_data_get_int(settings, "seconds"), 1, 120));
+	const bool leaderboard = obs_data_get_bool(settings, "leaderboard");
+	if (leaderboard != leaderboard_)
+		blog(LOG_INFO, "[%s] streams %s sent to the leaderboard", PLUGIN_TITLE, leaderboard ? "are" : "are not");
+	leaderboard_ = leaderboard;
 	if (newMic)
 		detachMic();
 	if (wasOn != on_)
@@ -235,12 +288,14 @@ void KeepTalking::load()
 		return;
 	obs_data_set_default_double(config, "threshold", thresholdDb_);
 	obs_data_set_default_int(config, "seconds", seconds_);
+	obs_data_set_default_bool(config, "leaderboard", leaderboard_);
 	on_ = obs_data_get_bool(config, "on");
 	game_ = obs_data_get_string(config, "game");
 	mic_ = obs_data_get_string(config, "mic");
 	thresholdDb_ = std::clamp(obs_data_get_double(config, "threshold"), -90.0, 0.0);
 	threshold_ = static_cast<float>(thresholdDb_);
 	seconds_ = static_cast<int>(std::clamp<long long>(obs_data_get_int(config, "seconds"), 1, 120));
+	leaderboard_ = obs_data_get_bool(config, "leaderboard");
 }
 
 void KeepTalking::save() const
@@ -256,6 +311,7 @@ void KeepTalking::save() const
 	obs_data_set_string(config, "mic", mic_.c_str());
 	obs_data_set_double(config, "threshold", thresholdDb_);
 	obs_data_set_int(config, "seconds", seconds_);
+	obs_data_set_bool(config, "leaderboard", leaderboard_);
 	obs_data_save_json_safe(config, path, "tmp", "bak");
 }
 
@@ -272,6 +328,114 @@ void KeepTalking::levelArrived(void *param, const float[], const float peak[], c
 	plugin->levelDb_ = loudest;
 	if (loudest >= plugin->threshold_.load())
 		plugin->lastLoudNs_ = os_gettime_ns();
+}
+
+// On OBS's audio thread, the mic's sound after its filters: counted while the plugin is on, unless the mic is muted.
+void KeepTalking::soundArrived(void *param, obs_source_t *, const struct audio_data *audio, bool muted)
+{
+	auto *plugin = self(param);
+	if (!plugin->counting_ || muted || !audio || !audio->data[0] || !audio->frames)
+		return;
+	plugin->counter_.add(reinterpret_cast<const float *>(audio->data[0]), audio->frames);
+	plugin->syllables_ = plugin->counter_.syllables();
+}
+
+long long KeepTalking::words() const
+{
+	return std::llround(static_cast<double>(syllables_.load() - streamStartSyllables_) / WordCounter::kSyllablesPerWord);
+}
+
+double KeepTalking::liveSeconds() const
+{
+	if (!streamStartNs_)
+		return 0;
+	return seconds((streamEndNs_ ? streamEndNs_ : os_gettime_ns()) - streamStartNs_);
+}
+
+void KeepTalking::streamStarted()
+{
+	if (streaming_)
+		return;
+	streaming_ = true;
+	streamStartSyllables_ = syllables_.load(); // nothing is counted off stream, so this holds still
+	streamStartNs_ = os_gettime_ns();
+	streamStartedAt_ = QDateTime::currentDateTimeUtc();
+	streamEndNs_ = 0;
+	counting_ = enabled_;
+	blog(LOG_INFO, "[%s] stream started: counting words on \"%s\"%s", PLUGIN_TITLE, mic_.c_str(),
+	     !enabled_ ? " once KeepTalking is on" : attached_ ? "" : " (not listening to it yet)");
+}
+
+void KeepTalking::streamStopped()
+{
+	if (!streaming_)
+		return;
+	counting_ = false;
+	streaming_ = false;
+	streamEndNs_ = os_gettime_ns();
+	countdown_ = SilenceCountdown();
+	shown_ = -1;
+	showNumber(-1);
+	const double live = liveSeconds();
+	const long long s = static_cast<long long>(live);
+	blog(LOG_INFO, "[%s] stream ended: %lld words in %lld:%02lld:%02lld (about %.0f words a minute)", PLUGIN_TITLE,
+	     words(), s / 3600, s / 60 % 60, s % 60, live > 0 ? words() * 60.0 / live : 0.0);
+
+	if (!leaderboard_) {
+		blog(LOG_INFO, "[%s] leaderboard: not sent, turned off in the settings", PLUGIN_TITLE);
+		showResult({false, notSent(QString::fromUtf8(obs_module_text("Leaderboard.Off")))});
+	} else if (live < kShortestSent) {
+		blog(LOG_INFO, "[%s] leaderboard: not sent, the stream was under 5 minutes", PLUGIN_TITLE);
+		showResult({false, notSent(QString::fromUtf8(obs_module_text("Leaderboard.TooShort")))});
+	} else {
+		submit({words(), live, streamStartedAt_});
+	}
+}
+
+// ---- the leaderboard ------------------------------------------------------------------------------------------------
+
+void KeepTalking::submit(const LeaderboardStream &stream)
+{
+	if (closed_)
+		return;
+	if (!network_)
+		network_ = new QNetworkAccessManager(this);
+	showResult({false, QString::fromUtf8(obs_module_text("Leaderboard.Sending"))});
+	QPointer<KeepTalking> alive = this;
+	submitToLeaderboard(stream, network_, [alive](const LeaderboardResult &result) {
+		if (alive)
+			alive->showResult(result);
+	});
+}
+
+void KeepTalking::submitTest(long long words, double seconds, const QDateTime &started, const QString &login)
+{
+	blog(LOG_INFO, "[%s] leaderboard: a test stream from the test route", PLUGIN_TITLE);
+	if (login.isEmpty()) {
+		submit({words, seconds, started});
+		return;
+	}
+	if (!network_)
+		network_ = new QNetworkAccessManager(this);
+	showResult({false, QString::fromUtf8(obs_module_text("Leaderboard.Sending"))});
+	QPointer<KeepTalking> alive = this;
+	submitAsChannel({words, seconds, started}, login, network_, [alive](const LeaderboardResult &result) {
+		if (alive)
+			alive->showResult(result);
+	});
+}
+
+// The result, kept for status() and shown in the manager's settings if they are open.
+void KeepTalking::showResult(const LeaderboardResult &result)
+{
+	{
+		std::lock_guard<std::mutex> hold(statusLock_);
+		result_ = result;
+	}
+	if (!resultField_)
+		resultField_ = settingsField("Leaderboard.Result");
+	if (resultField_ && resultField_->text() != result.line)
+		resultField_->setText(result.line);
 }
 
 void KeepTalking::findMic()
@@ -293,12 +457,18 @@ void KeepTalking::attachMic()
 	if (source && (obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO) &&
 	    obs_volmeter_attach_source(meter_, source)) {
 		attached_ = obs_source_get_weak_source(source);
+		obs_source_add_audio_capture_callback(source, soundArrived, this);
 		blog(LOG_INFO, "[%s] listening to \"%s\"", PLUGIN_TITLE, mic_.c_str());
 	}
 }
 
 void KeepTalking::detachMic()
 {
+	if (attached_) {
+		OBSSourceAutoRelease source = obs_weak_source_get_source(attached_);
+		if (source) // a mic that was removed took its callbacks with it
+			obs_source_remove_audio_capture_callback(source, soundArrived, this);
+	}
 	if (meter_ && attached_)
 		obs_volmeter_detach_source(meter_);
 	attached_ = nullptr;
@@ -327,7 +497,7 @@ void KeepTalking::tick()
 	const double now = seconds(os_gettime_ns());
 	const uint64_t loudNs = lastLoudNs_.load();
 	const double lastLoud = loudNs ? seconds(loudNs) : -1e9;
-	const bool armed = on_ && attached_ && gameRunning_;
+	const bool armed = on_ && streaming_ && attached_ && gameRunning_;
 
 	switch (countdown_.step(now, armed, lastLoud, seconds_)) {
 	case SilenceCountdown::Event::Started:
@@ -349,10 +519,12 @@ void KeepTalking::tick()
 		showNumber(shown);
 	}
 	showLevel();
+	showWordCount(words());
+	showWords();
 
 	std::lock_guard<std::mutex> hold(statusLock_);
-	status_ = Status{on_,   game_, gameRunning_, mic_, static_cast<bool>(attached_), levelDb_.load(), thresholdDb_,
-			 seconds_, shown_};
+	status_ = Status{on_,	  game_,   gameRunning_, mic_,     static_cast<bool>(attached_), levelDb_.load(),
+			 thresholdDb_, seconds_, shown_,      streaming_, words(), liveSeconds()};
 }
 
 void KeepTalking::closeGame()
@@ -385,23 +557,7 @@ void KeepTalking::showLevel()
 		if (++sinceSearch < kSlowMs / kTickMs)
 			return;
 		sinceSearch = 0;
-		const QString label = QString::fromUtf8(obs_module_text("Level"));
-		for (QWidget *widget : QApplication::allWidgets()) {
-			auto *text = qobject_cast<QLabel *>(widget);
-			if (!text || text->text() != label || !text->parentWidget())
-				continue;
-			auto *form = qobject_cast<QFormLayout *>(text->parentWidget()->layout());
-			int row = -1;
-			QFormLayout::ItemRole role;
-			if (!form || (form->getWidgetPosition(text, &row, &role), row < 0))
-				continue;
-			QLayoutItem *field = form->itemAt(row, QFormLayout::FieldRole);
-			if (auto *edit = field ? qobject_cast<QLineEdit *>(field->widget()) : nullptr) {
-				levelField_ = edit;
-				edit->setReadOnly(true);
-				break;
-			}
-		}
+		levelField_ = settingsField("Level");
 		if (!levelField_)
 			return;
 	}
@@ -410,11 +566,30 @@ void KeepTalking::showLevel()
 		levelField_->setText(text);
 }
 
+// The word count in the manager's settings, live while they are open: its field is found by its label.
+void KeepTalking::showWords()
+{
+	static int sinceSearch = 0;
+	if (!wordsField_) {
+		if (++sinceSearch < kSlowMs / kTickMs)
+			return;
+		sinceSearch = 0;
+		wordsField_ = settingsField("Words");
+		if (!resultField_)
+			resultField_ = settingsField("Leaderboard.Result"); // found here so it is read-only
+		if (!wordsField_)
+			return;
+	}
+	const QString text = wordsText(words());
+	if (wordsField_->text() != text)
+		wordsField_->setText(text);
+}
+
 // ---- the test route -------------------------------------------------------------------------------------------------
 
 void KeepTalking::startCountdown()
 {
-	if (closed_ || !enabled_)
+	if (closed_ || !enabled_ || !streaming_)
 		return;
 	blog(LOG_INFO, "[%s] countdown started by the test route", PLUGIN_TITLE);
 	countdown_.start(seconds(os_gettime_ns()));
@@ -429,7 +604,10 @@ void KeepTalking::talk()
 Status KeepTalking::status() const
 {
 	std::lock_guard<std::mutex> hold(statusLock_);
-	return status_;
+	Status status = status_;
+	status.leaderboardSent = result_.sent;
+	status.leaderboard = result_.line.toStdString();
+	return status;
 }
 
 } // namespace sarxina::keeptalking

@@ -1,10 +1,12 @@
-// KeepTalking's self-test (see shared/src/self-test.hpp): the countdown played on made-up times, closing a program
+// KeepTalking's self-test (see shared/src/self-test.hpp): the countdown played on made-up times, the word count on
+// made-up sound, closing a program
 // (a copy of Windows' ping.exe under a name of its own, so nothing else can match it), and the number's picture. No
 // OBS, no mic and no sound.
 #include "countdown-picture.hpp"
 #include "processes.hpp"
 #include "self-test.hpp"
 #include "silence-countdown.hpp"
+#include "word-counter.hpp"
 
 #include <QDir>
 #include <QFile>
@@ -12,7 +14,9 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -186,6 +190,66 @@ bool processesTest()
 	return tally.report("closing the game");
 }
 
+// Made-up sound: `perSecond` syllables a second for `seconds`, each 120 ms of a voice at 150 Hz (its first ten
+// harmonics), or of hiss when `voiced` is false, faded in and out, with near-silence between them.
+std::vector<float> syllableSound(double rate, double seconds, double perSecond, bool voiced)
+{
+	std::vector<float> out(static_cast<size_t>(rate * seconds));
+	uint32_t noise = 12345;
+	const double period = 1.0 / perSecond, on = 0.12;
+	for (size_t i = 0; i < out.size(); i++) {
+		const double t = i / rate;
+		const double into = std::fmod(t, period);
+		const double envelope = into < on ? std::sin(3.14159265358979 * into / on) : 0.0;
+		double sound = 0;
+		if (voiced)
+			for (int h = 1; h <= 10; h++)
+				sound += std::sin(2 * 3.14159265358979 * 150 * h * t) / h;
+		else {
+			noise = noise * 1664525u + 1013904223u;
+			sound = (static_cast<double>(noise >> 8) / (1 << 24) - 0.5) * 3;
+		}
+		noise = noise * 1664525u + 1013904223u;
+		const double room = (static_cast<double>(noise >> 8) / (1 << 24) - 0.5) * 0.0004;
+		out[i] = static_cast<float>(0.3 * envelope * sound + room);
+	}
+	return out;
+}
+
+uint64_t count(const std::vector<float> &sound, double rate, size_t piece)
+{
+	sarxina::keeptalking::WordCounter counter(rate);
+	for (size_t at = 0; at < sound.size(); at += piece)
+		counter.add(sound.data() + at, std::min(piece, sound.size() - at));
+	return counter.syllables();
+}
+
+bool wordCounterTest()
+{
+	Tally tally;
+	const std::vector<float> voice = syllableSound(48000, 20, 4, true); // 80 syllables
+	const uint64_t heard = count(voice, 48000, 1024);
+	tally.expect(heard >= 76 && heard <= 84, "80 voiced syllables at 48 kHz count as 76-84 (" + std::to_string(heard) + ")");
+	tally.expect(count(voice, 48000, 1) == heard && count(voice, 48000, 480) == heard,
+		     "the same count whatever size the pieces of sound come in");
+	const uint64_t at44 = count(syllableSound(44100, 20, 4, true), 44100, 1024);
+	const uint64_t at16 = count(syllableSound(16000, 20, 4, true), 16000, 1024);
+	tally.expect(at44 >= 76 && at44 <= 84 && at16 >= 76 && at16 <= 84,
+		     "the same voice at 44.1 and 16 kHz too (" + std::to_string(at44) + ", " + std::to_string(at16) + ")");
+	const uint64_t fast = count(syllableSound(48000, 20, 7, true), 48000, 1024);
+	tally.expect(fast >= 133 && fast <= 147, "fast talk, 140 syllables, counts as 133-147 (" + std::to_string(fast) + ")");
+	const uint64_t hiss = count(syllableSound(48000, 20, 4, false), 48000, 1024);
+	tally.expect(hiss <= 4, "80 bursts of hiss (not a voice) count as 4 at most (" + std::to_string(hiss) + ")");
+	tally.expect(count(std::vector<float>(48000 * 10, 0.f), 48000, 1024) == 0, "silence counts nothing");
+	sarxina::keeptalking::WordCounter counter(48000);
+	counter.add(voice.data(), voice.size());
+	counter.reset();
+	tally.expect(counter.syllables() == 0 && counter.seconds() == 0, "starting over clears the count");
+	const double words = static_cast<double>(heard) / sarxina::keeptalking::WordCounter::kSyllablesPerWord;
+	sarxina::test::report(true, "word count: 80 syllables -> %llu counted, %.0f words", static_cast<unsigned long long>(heard), words);
+	return tally.report("the word count");
+}
+
 bool pictureTest(const char *folder)
 {
 	Tally tally;
@@ -214,7 +278,7 @@ bool pictureTest(const char *folder)
 
 bool runSelfTest(const char *picturesFolder)
 {
-	const bool ok = countdownTest() & processesTest() & pictureTest(picturesFolder);
+	const bool ok = countdownTest() & processesTest() & wordCounterTest() & pictureTest(picturesFolder);
 	sarxina::test::report(ok, ok ? "passed" : "FAILED");
 	return ok;
 }

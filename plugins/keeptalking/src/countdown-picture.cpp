@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace sarxina::keeptalking {
 
@@ -21,59 +22,14 @@ constexpr double kLineHeight = 0.12;  // the line over the number, of the canvas
 constexpr double kLineMaxWidth = 0.92; // of the canvas's width, at most
 constexpr const char *kLine = "START YAPPING OR ELSE";
 
-} // namespace
+struct Part {
+	QPainterPath path;
+	double outline, shadow;
+};
 
-QString countdownFont()
+// The parts, outlined, shadowed and filled, on a transparent picture just big enough for them.
+QImage paintParts(const std::vector<Part> &parts)
 {
-	static const QString family = [] {
-		const QStringList families = QFontDatabase::families();
-		for (const char *wanted : {"Luckiest Guy", "Arial Black"})
-			if (families.contains(QString::fromLatin1(wanted), Qt::CaseInsensitive))
-				return QString::fromLatin1(wanted);
-		return QStringLiteral("Arial");
-	}();
-	return family;
-}
-
-QImage paintNumber(int number, int canvasWidth, int canvasHeight)
-{
-	const QString family = countdownFont();
-	const bool bold = family != QStringLiteral("Luckiest Guy"); // Luckiest Guy is bold already
-
-	// The number, and the line above it, each a path at its own size.
-	const int digitSize = std::max(16, static_cast<int>(std::lround(canvasHeight * kDigitHeight)));
-	QFont digitFont(family);
-	digitFont.setPixelSize(digitSize);
-	digitFont.setBold(bold);
-	QPainterPath digit;
-	digit.addText(0, 0, digitFont, QString::number(number));
-
-	int lineSize = std::max(12, static_cast<int>(std::lround(canvasHeight * kLineHeight)));
-	QFont lineFont(family);
-	lineFont.setBold(bold);
-	QPainterPath line;
-	for (;;) { // as big as it may be, but inside the canvas's width
-		lineFont.setPixelSize(lineSize);
-		line = QPainterPath();
-		line.addText(0, 0, lineFont, QString::fromLatin1(kLine));
-		const double outer = line.boundingRect().width() + 2 * lineSize * kOutlineWidth;
-		if (outer <= canvasWidth * kLineMaxWidth || lineSize <= 12)
-			break;
-		lineSize = std::max(12, static_cast<int>(lineSize * 0.95));
-	}
-
-	struct Part {
-		QPainterPath path;
-		double outline, shadow;
-	};
-	// The line centred over the number, a little apart.
-	const QRectF lineInk = line.boundingRect(), digitInk = digit.boundingRect();
-	const double gap = lineSize * 0.45 + lineSize * kShadow;
-	line.translate(-lineInk.center().x(), -lineInk.bottom());
-	digit.translate(-digitInk.center().x(), gap - digitInk.top());
-	const Part parts[] = {{line, lineSize * kOutlineWidth, lineSize * kShadow},
-			      {digit, digitSize * kOutlineWidth, digitSize * kShadow}};
-
 	QRectF ink;
 	for (const Part &part : parts)
 		ink = ink.united(part.path.boundingRect().adjusted(-part.outline, -part.outline, part.outline,
@@ -105,4 +61,55 @@ QImage paintNumber(int number, int canvasWidth, int canvasHeight)
 	}
 	return picture;
 }
+
+QFont captionFont(int pixelSize)
+{
+	const QString family = countdownFont();
+	QFont font(family);
+	font.setPixelSize(pixelSize);
+	font.setBold(family != QStringLiteral("Luckiest Guy")); // Luckiest Guy is bold already
+	return font;
+}
+
+} // namespace
+
+QString countdownFont()
+{
+	static const QString family = [] {
+		const QStringList families = QFontDatabase::families();
+		for (const char *wanted : {"Luckiest Guy", "Arial Black"})
+			if (families.contains(QString::fromLatin1(wanted), Qt::CaseInsensitive))
+				return QString::fromLatin1(wanted);
+		return QStringLiteral("Arial");
+	}();
+	return family;
+}
+
+QImage paintNumber(int number, int canvasWidth, int canvasHeight)
+{
+	// The number, and the line above it, each a path at its own size.
+	const int digitSize = std::max(16, static_cast<int>(std::lround(canvasHeight * kDigitHeight)));
+	QPainterPath digit;
+	digit.addText(0, 0, captionFont(digitSize), QString::number(number));
+
+	int lineSize = std::max(12, static_cast<int>(std::lround(canvasHeight * kLineHeight)));
+	QPainterPath line;
+	for (;;) { // as big as it may be, but inside the canvas's width
+		line = QPainterPath();
+		line.addText(0, 0, captionFont(lineSize), QString::fromLatin1(kLine));
+		const double outer = line.boundingRect().width() + 2 * lineSize * kOutlineWidth;
+		if (outer <= canvasWidth * kLineMaxWidth || lineSize <= 12)
+			break;
+		lineSize = std::max(12, static_cast<int>(lineSize * 0.95));
+	}
+
+	// The line centred over the number, a little apart.
+	const QRectF lineInk = line.boundingRect(), digitInk = digit.boundingRect();
+	const double gap = lineSize * 0.45 + lineSize * kShadow;
+	line.translate(-lineInk.center().x(), -lineInk.bottom());
+	digit.translate(-digitInk.center().x(), gap - digitInk.top());
+	return paintParts({{line, lineSize * kOutlineWidth, lineSize * kShadow},
+			   {digit, digitSize * kOutlineWidth, digitSize * kShadow}});
+}
+
 } // namespace sarxina::keeptalking
